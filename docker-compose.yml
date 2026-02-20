@@ -1,0 +1,196 @@
+version: "3.9"
+
+# =============================================================
+# Supabase Auth Platform - Docker Compose
+# Startet: PostgreSQL, GoTrue, Backend-API, Frontend, Nginx
+# =============================================================
+
+networks:
+  auth-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  certbot-certs:
+  certbot-webroot:
+  nginx-logs:
+
+services:
+
+  # ─── PostgreSQL Datenbank ─────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: auth-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-supabase_auth}
+      POSTGRES_USER: ${POSTGRES_USER:-supabase}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - auth-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-supabase} -d ${POSTGRES_DB:-supabase_auth}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Kein Port nach außen – nur intern erreichbar
+
+  # ─── GoTrue (Supabase Auth Service) ──────────────────────
+  gotrue:
+    image: supabase/gotrue:v2.143.0
+    container_name: auth-gotrue
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Datenbank
+      GOTRUE_DB_DRIVER: postgres
+      DATABASE_URL: ${DATABASE_URL}
+      # API
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      # JWT
+      GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET}
+      GOTRUE_JWT_EXP: ${GOTRUE_JWT_EXP:-3600}
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: ${GOTRUE_JWT_DEFAULT_GROUP_NAME:-authenticated}
+      GOTRUE_JWT_AUD: ${GOTRUE_JWT_AUD:-authenticated}
+      # Admin
+      GOTRUE_OPERATOR_TOKEN: ${GOTRUE_OPERATOR_TOKEN}
+      # URLs
+      API_EXTERNAL_URL: ${GOTRUE_API_EXTERNAL_URL}
+      GOTRUE_SITE_URL: ${GOTRUE_SITE_URL}
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/recover
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
+      # E-Mail
+      GOTRUE_SMTP_HOST: ${GOTRUE_SMTP_HOST:-}
+      GOTRUE_SMTP_PORT: ${GOTRUE_SMTP_PORT:-587}
+      GOTRUE_SMTP_USER: ${GOTRUE_SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${GOTRUE_SMTP_PASS:-}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${GOTRUE_SMTP_ADMIN_EMAIL:-noreply@example.com}
+      GOTRUE_MAILER_AUTOCONFIRM: ${GOTRUE_MAILER_AUTOCONFIRM:-true}
+      # Signup
+      GOTRUE_DISABLE_SIGNUP: ${GOTRUE_DISABLE_SIGNUP:-false}
+      GOTRUE_LOG_LEVEL: info
+    networks:
+      - auth-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9999/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ─── Backend Management API (Node.js/Express) ─────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: auth-backend
+    restart: unless-stopped
+    depends_on:
+      gotrue:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: ${BACKEND_PORT:-4000}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET}
+      GOTRUE_URL: ${GOTRUE_URL:-http://gotrue:9999}
+      GOTRUE_OPERATOR_TOKEN: ${GOTRUE_OPERATOR_TOKEN}
+      DOMAIN: ${DOMAIN}
+      AUTH_SUBDOMAIN: ${AUTH_SUBDOMAIN}
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL}
+      CLOUDFLARE_TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+      CLOUDFLARE_TUNNEL_NAME: ${CLOUDFLARE_TUNNEL_NAME:-supabase-auth-tunnel}
+    volumes:
+      # Docker Socket für Container-Management
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # .env für Lesen/Schreiben über das Dashboard
+      - ./.env:/app/.env
+      # Nginx Config für Domain-Management
+      - ./nginx/conf.d:/etc/nginx-managed/conf.d
+      - certbot-certs:/etc/letsencrypt:ro
+      # Tunnel Config
+      - ./cloudflare:/etc/cloudflare
+    networks:
+      - auth-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ─── Frontend Dashboard (Next.js) ─────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    container_name: auth-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    networks:
+      - auth-network
+
+  # ─── Nginx Reverse Proxy ──────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: auth-nginx
+    restart: unless-stopped
+    depends_on:
+      - gotrue
+      - backend
+      - frontend
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - certbot-certs:/etc/letsencrypt:ro
+      - certbot-webroot:/var/www/certbot:ro
+      - nginx-logs:/var/log/nginx
+    environment:
+      DOMAIN: ${DOMAIN}
+      AUTH_SUBDOMAIN: ${AUTH_SUBDOMAIN}
+      DASHBOARD_SUBDOMAIN: ${DASHBOARD_SUBDOMAIN}
+      NGINX_ENVSUBST_TEMPLATE_SUFFIX: .template
+    networks:
+      - auth-network
+
+  # ─── Certbot (SSL – optional, on-demand) ─────────────────
+  certbot:
+    image: certbot/certbot:latest
+    container_name: auth-certbot
+    profiles: ["ssl"]   # Nur mit: docker compose --profile ssl up certbot
+    volumes:
+      - certbot-certs:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
+    command: >
+      certonly --webroot -w /var/www/certbot
+      --email ${CERTBOT_EMAIL}
+      --agree-tos --no-eff-email
+      -d ${DOMAIN} -d ${AUTH_SUBDOMAIN} -d ${DASHBOARD_SUBDOMAIN}
+
+  # ─── Cloudflare Tunnel (optional) ────────────────────────
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: auth-cloudflared
+    profiles: ["tunnel"]  # Nur mit: docker compose --profile tunnel up cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - auth-network

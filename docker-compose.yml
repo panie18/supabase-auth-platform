@@ -136,15 +136,16 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
     container_name: auth-frontend
     restart: unless-stopped
     depends_on:
       - backend
+    ports:
+      - "3000:3000"
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      # Server-seitiges Rewrite-Ziel (Docker-intern, kein build-arg)
+      INTERNAL_API_URL: http://backend:4000
     networks:
       - auth-network
 

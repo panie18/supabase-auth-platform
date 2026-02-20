@@ -7,7 +7,8 @@ const nextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/:path*`,
+        // INTERNAL_API_URL = Docker-interner Service-Name (server-side only, kein build-arg)
+        destination: `${process.env.INTERNAL_API_URL || 'http://backend:4000'}/:path*`,
       },
     ];
   },

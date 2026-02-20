@@ -95,8 +95,8 @@ router.post('/containers/:id/action', async (req, res) => {
  */
 router.get('/logs/:id', async (req, res) => {
   validateContainerId(req.params.id);
-  const lines = Math.min(parseInt(req.query.lines as string || '200', 10), 2000); // max 2000
-  const since = Math.max(0, parseInt(req.query.since as string || '0', 10));
+  const lines = Math.min(parseInt(req.query.lines || '200', 10), 2000); // max 2000
+  const since = Math.max(0, parseInt(req.query.since || '0', 10));
   const container = docker.getContainer(req.params.id);
 
   const logBuffer = await container.logs({

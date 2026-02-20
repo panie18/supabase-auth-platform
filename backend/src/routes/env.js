@@ -5,26 +5,30 @@ const fs = require('fs').promises;
 const path = require('path');
 const router = express.Router();
 
-// .env liegt im Projekt-Root (wird via Volume eingehängt)
 const ENV_FILE = process.env.ENV_FILE_PATH || '/app/.env';
 
-// Felder, die im UI als "Secret" maskiert werden sollen (Wert nie im Klartext zurückgeben)
 const SECRET_KEYS = [
-  'POSTGRES_PASSWORD',
-  'GOTRUE_JWT_SECRET',
-  'GOTRUE_OPERATOR_TOKEN',
-  'ADMIN_PASSWORD',
-  'ADMIN_JWT_SECRET',
-  'GOTRUE_SMTP_PASS',
-  'CLOUDFLARE_TUNNEL_TOKEN',
+  'POSTGRES_PASSWORD', 'GOTRUE_JWT_SECRET', 'GOTRUE_OPERATOR_TOKEN',
+  'ADMIN_PASSWORD', 'ADMIN_JWT_SECRET', 'GOTRUE_SMTP_PASS', 'CLOUDFLARE_TUNNEL_TOKEN',
 ];
-
-// Felder die nicht editiert werden dürfen (intern)
 const READONLY_KEYS = ['DATABASE_URL'];
 
-/**
- * .env-Datei parsen → Array von { key, value, comment, isSecret, isReadonly }
- */
+// FIX: Erlaubte Key-Namen (nur Großbuchstaben, Ziffern, Unterstrich)
+const VALID_KEY_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
+
+function validateKey(key) {
+  if (!key || !VALID_KEY_RE.test(key)) {
+    const err = new Error(`Ungültiger ENV-Key: "${key}" (nur A-Z, 0-9, _ erlaubt)`);
+    err.status = 400;
+    throw err;
+  }
+}
+
+// FIX: Regex-Sonderzeichen im Key escapen bevor er in einem RegExp verwendet wird
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function parseEnv(content) {
   const lines = content.split('\n');
   const result = [];
@@ -32,11 +36,8 @@ function parseEnv(content) {
 
   for (const rawLine of lines) {
     const line = rawLine.trimEnd();
-
-    // Kommentarzeile oder Abschnitts-Trenner
     if (line.startsWith('#') || line.trim() === '') {
       if (line.startsWith('# ─') || line.startsWith('# =') || line.trim() === '') {
-        // Abschnitts-Trenner: als group separator
         result.push({ type: 'separator', text: line });
         pendingComment = '';
       } else {
@@ -44,19 +45,15 @@ function parseEnv(content) {
       }
       continue;
     }
-
-    // KEY=VALUE
     const eqIdx = line.indexOf('=');
     if (eqIdx === -1) continue;
-
     const key = line.slice(0, eqIdx).trim();
     const value = line.slice(eqIdx + 1).trim();
-
     result.push({
       type: 'var',
       key,
-      value: SECRET_KEYS.includes(key) ? '' : value, // Secrets werden nicht zurückgegeben
-      raw_value: value, // Interner Wert (nicht zum Client)
+      value: SECRET_KEYS.includes(key) ? '' : value,
+      raw_value: value,
       comment: pendingComment,
       isSecret: SECRET_KEYS.includes(key),
       isReadonly: READONLY_KEYS.includes(key),
@@ -64,45 +61,18 @@ function parseEnv(content) {
     });
     pendingComment = '';
   }
-
   return result;
 }
 
 /**
- * Array von Vars → .env-String
- */
-function serializeEnv(entries, originalContent) {
-  // Originaldatei als Basis nehmen und nur die geänderten Werte ersetzen
-  let content = originalContent;
-  for (const entry of entries) {
-    if (!entry.key || entry.isReadonly) continue;
-    const regex = new RegExp(`^${entry.key}=.*$`, 'm');
-    if (regex.test(content)) {
-      content = content.replace(regex, `${entry.key}=${entry.value}`);
-    } else {
-      content += `\n${entry.key}=${entry.value}`;
-    }
-  }
-  return content;
-}
-
-/**
  * GET /env
- * Gibt geparste .env zurück (Secrets werden NICHT im Klartext geliefert)
  */
 router.get('/', async (req, res) => {
   try {
     const content = await fs.readFile(ENV_FILE, 'utf8');
     const entries = parseEnv(content);
-
-    // raw_value aus der Antwort entfernen (niemals zum Client)
     const safe = entries.map(({ raw_value, ...e }) => e);
-
-    res.json({
-      entries: safe,
-      file: ENV_FILE,
-      writable: true,
-    });
+    res.json({ entries: safe, file: ENV_FILE, writable: true });
   } catch (err) {
     if (err.code === 'ENOENT') {
       return res.json({ entries: [], file: ENV_FILE, writable: false, error: '.env nicht gefunden' });
@@ -112,21 +82,17 @@ router.get('/', async (req, res) => {
 });
 
 /**
- * GET /env/raw
- * Gibt die rohe .env-Datei zurück (Secrets als *** maskiert)
+ * GET /env/raw  — Secrets als ***HIDDEN*** maskiert
  */
 router.get('/raw', async (req, res) => {
   try {
     let content = await fs.readFile(ENV_FILE, 'utf8');
-
-    // Secrets in der Raw-Ausgabe maskieren
     for (const key of SECRET_KEYS) {
       content = content.replace(
-        new RegExp(`^(${key}=).+$`, 'm'),
+        new RegExp(`^(${escapeRegex(key)}=).+$`, 'm'),
         (_, prefix) => `${prefix}***HIDDEN***`
       );
     }
-
     res.json({ content, file: ENV_FILE });
   } catch (err) {
     if (err.code === 'ENOENT') {
@@ -137,22 +103,23 @@ router.get('/raw', async (req, res) => {
 });
 
 /**
- * PUT /env
- * Einzelne oder mehrere Variablen aktualisieren
- * Body: { updates: [{ key, value }] }
- * Secrets können mit leerem Wert '' übergeben werden → werden dann NICHT überschrieben
+ * PUT /env  — Einzelne Variablen aktualisieren
  */
 router.put('/', async (req, res) => {
   const { updates } = req.body;
-
   if (!Array.isArray(updates) || updates.length === 0) {
     return res.status(400).json({ error: 'updates-Array erforderlich' });
   }
+  if (updates.length > 100) {
+    return res.status(400).json({ error: 'Maximal 100 Updates pro Request' });
+  }
 
-  // Readonly-Keys filtern
+  // FIX: Jeden Key validieren bevor er in Regex verwendet wird
+  for (const u of updates) {
+    validateKey(u.key);
+  }
+
   const filtered = updates.filter(u => !READONLY_KEYS.includes(u.key));
-
-  // Aktuelle .env lesen
   let content = '';
   try {
     content = await fs.readFile(ENV_FILE, 'utf8');
@@ -160,30 +127,22 @@ router.put('/', async (req, res) => {
     if (err.code !== 'ENOENT') throw err;
   }
 
-  // Jede Variable aktualisieren
   for (const { key, value } of filtered) {
-    if (!key) continue;
-
-    // Leerer Wert bei Secret → nicht überschreiben (Benutzer hat es nicht geändert)
     if (SECRET_KEYS.includes(key) && value === '') continue;
-
-    const regex = new RegExp(`^${key}=.*$`, 'm');
+    // FIX: escapeRegex verhindert ReDoS bei speziellen Key-Namen
+    const regex = new RegExp(`^${escapeRegex(key)}=.*$`, 'm');
     if (regex.test(content)) {
       content = content.replace(regex, `${key}=${value}`);
     } else {
       content += `\n${key}=${value}`;
     }
-
-    // Auch im laufenden Prozess aktualisieren
     process.env[key] = value;
   }
 
-  // .env schreiben
   await fs.writeFile(ENV_FILE, content, { mode: 0o600 });
-
   res.json({
     success: true,
-    message: `${filtered.length} Variable(n) aktualisiert. Neustart für vollständige Wirkung empfohlen.`,
+    message: `${filtered.length} Variable(n) aktualisiert. Neustart empfohlen.`,
     updated: filtered.map(u => u.key),
     restart_recommended: true,
   });
@@ -191,49 +150,45 @@ router.put('/', async (req, res) => {
 
 /**
  * PUT /env/raw
- * Gesamte .env-Datei als Rohtext ersetzen (nur nicht-maskierte Inhalte)
- * Body: { content }
  */
 router.put('/raw', async (req, res) => {
   const { content } = req.body;
   if (typeof content !== 'string') {
     return res.status(400).json({ error: 'content erforderlich' });
   }
-
-  // Sicherheit: Sicherstellen dass keine HIDDEN-Marker überschrieben werden
+  if (content.length > 64 * 1024) {
+    return res.status(400).json({ error: '.env-Datei darf maximal 64 KB groß sein' });
+  }
   if (content.includes('***HIDDEN***')) {
     return res.status(400).json({
-      error: 'Maskierte Secret-Felder (***HIDDEN***) müssen zuerst entfernt oder befüllt werden',
+      error: 'Maskierte Secret-Felder (***HIDDEN***) müssen entfernt oder befüllt werden',
     });
   }
-
   await fs.writeFile(ENV_FILE, content, { mode: 0o600 });
-
   res.json({
     success: true,
-    message: '.env-Datei gespeichert. Container-Neustart für vollständige Wirkung erforderlich.',
+    message: '.env gespeichert. Container-Neustart erforderlich.',
     restart_recommended: true,
   });
 });
 
 /**
  * POST /env/restart-services
- * Startet alle Docker-Container neu (damit neue ENV-Werte aktiv werden)
  */
 router.post('/restart-services', async (req, res) => {
   const { execFile } = require('child_process');
   const { promisify } = require('util');
   const execFileAsync = promisify(execFile);
-
   try {
-    // docker compose restart via Docker CLI
+    // FIX: Arbeitsverzeichnis sicher aus ENV_FILE ableiten
+    const projectDir = path.resolve(path.dirname(ENV_FILE));
     await execFileAsync('docker', ['compose', 'restart'], {
-      cwd: path.dirname(ENV_FILE.replace('.env', '')),
+      cwd: projectDir,
       timeout: 60000,
+      env: { ...process.env, PATH: process.env.PATH },
     });
     res.json({ success: true, message: 'Alle Container neu gestartet' });
   } catch (err) {
-    // Fallback: einzelne Container per Dockerode neustarten
     res.json({
       success: false,
       message: 'Automatischer Neustart fehlgeschlagen – bitte manuell neustarten',

@@ -52,7 +52,9 @@ function LogViewer() {
   function startStream(id: string) {
     if (wsRef.current) wsRef.current.close();
 
-    const wsUrl = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api/docker/logs/stream?id=${id}`;
+    // FIX: JWT-Token wird als Query-Parameter mitgesendet (WS unterstützt keine Custom-Header)
+    const token = localStorage.getItem("auth_token") || "";
+    const wsUrl = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api/docker/logs/stream?id=${encodeURIComponent(id)}&token=${encodeURIComponent(token)}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

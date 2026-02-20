@@ -36,6 +36,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     # Kein Port nach außen – nur intern erreichbar
 
   # ─── GoTrue (Supabase Auth Service) ──────────────────────
@@ -77,6 +79,8 @@ services:
       # Signup
       GOTRUE_DISABLE_SIGNUP: ${GOTRUE_DISABLE_SIGNUP:-false}
       GOTRUE_LOG_LEVEL: info
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     networks:
       - auth-network
     healthcheck:
@@ -103,6 +107,7 @@ services:
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET}
       GOTRUE_URL: ${GOTRUE_URL:-http://gotrue:9999}
       GOTRUE_OPERATOR_TOKEN: ${GOTRUE_OPERATOR_TOKEN}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://${DASHBOARD_SUBDOMAIN}}
       DOMAIN: ${DOMAIN}
       AUTH_SUBDOMAIN: ${AUTH_SUBDOMAIN}
       CERTBOT_EMAIL: ${CERTBOT_EMAIL}
@@ -182,6 +187,28 @@ services:
       --email ${CERTBOT_EMAIL}
       --agree-tos --no-eff-email
       -d ${DOMAIN} -d ${AUTH_SUBDOMAIN} -d ${DASHBOARD_SUBDOMAIN}
+
+  # ─── Watchtower – Automatische Docker-Image-Updates ──────────
+  # Prüft täglich ob neue Images verfügbar sind und aktualisiert sie.
+  # Nur Container mit Label "com.centurylinklabs.watchtower.enable=true" werden aktualisiert.
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: auth-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_SCHEDULE: "0 0 4 * * *"        # Täglich 04:00 Uhr
+      WATCHTOWER_CLEANUP: "true"                 # Alte Images nach Update löschen
+      WATCHTOWER_INCLUDE_STOPPED: "false"
+      WATCHTOWER_LABEL_ENABLE: "true"            # Nur gelabelte Container
+      WATCHTOWER_ROLLING_RESTART: "true"         # Einzeln neustarten (kein Downtime)
+      WATCHTOWER_NOTIFICATION_SLACK_HOOK_URL: ${WATCHTOWER_SLACK_WEBHOOK:-}
+      TZ: "Europe/Berlin"
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"  # Watchtower updatet sich nicht selbst
+    networks:
+      - auth-network
 
   # ─── Cloudflare Tunnel (optional) ────────────────────────
   cloudflared:

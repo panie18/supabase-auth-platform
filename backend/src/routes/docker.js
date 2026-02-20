@@ -2,14 +2,23 @@
 
 const express = require('express');
 const Dockerode = require('dockerode');
+const jwt = require('jsonwebtoken');
 const router = express.Router();
 
-// Docker-Client über Unix-Socket
 const docker = new Dockerode({ socketPath: '/var/run/docker.sock' });
+
+// FIX: Container-ID nur alphanumerisch + max 64 Zeichen erlauben
+const CONTAINER_ID_RE = /^[a-zA-Z0-9_.-]{1,64}$/;
+function validateContainerId(id) {
+  if (!id || !CONTAINER_ID_RE.test(id)) {
+    const err = new Error('Ungültige Container-ID');
+    err.status = 400;
+    throw err;
+  }
+}
 
 /**
  * GET /docker/containers
- * Alle Container auflisten (inkl. Status)
  */
 router.get('/containers', async (req, res) => {
   const containers = await docker.listContainers({ all: true });
@@ -18,19 +27,23 @@ router.get('/containers', async (req, res) => {
     name: c.Names[0]?.replace('/', '') || 'unbekannt',
     image: c.Image,
     status: c.Status,
-    state: c.State, // running, exited, paused, ...
+    state: c.State,
     created: new Date(c.Created * 1000).toISOString(),
     ports: c.Ports,
-    labels: c.Labels,
+    // Labels nur wenn nicht-sensitiv (kein docker-compose secrets etc.)
+    labels: Object.fromEntries(
+      Object.entries(c.Labels || {}).filter(([k]) => !k.includes('secret') && !k.includes('password'))
+    ),
   }));
   res.json(result);
 });
 
 /**
  * GET /docker/containers/:id
- * Container-Details abrufen
+ * FIX: Env-Variablen werden NICHT zurückgegeben (könnten Secrets enthalten)
  */
 router.get('/containers/:id', async (req, res) => {
+  validateContainerId(req.params.id);
   const container = docker.getContainer(req.params.id);
   const info = await container.inspect();
   res.json({
@@ -40,29 +53,31 @@ router.get('/containers/:id', async (req, res) => {
     state: info.State,
     created: info.Created,
     ports: info.NetworkSettings.Ports,
-    env: info.Config.Env,
-    mounts: info.Mounts,
+    // FIX: env wurde entfernt – enthält ggf. Secrets wie JWT_SECRET, DB_PASS etc.
+    // env: info.Config.Env,  ← ABSICHTLICH AUSKOMMENTIERT
+    mounts: info.Mounts.map(m => ({
+      type: m.Type,
+      source: m.Source,
+      destination: m.Destination,
+      mode: m.Mode,
+    })),
     restartPolicy: info.HostConfig.RestartPolicy,
   });
 });
 
 /**
  * POST /docker/containers/:id/action
- * Body: { action: 'start' | 'stop' | 'restart' | 'pause' | 'unpause' }
  */
 router.post('/containers/:id/action', async (req, res) => {
+  validateContainerId(req.params.id);
   const { action } = req.body;
   const validActions = ['start', 'stop', 'restart', 'pause', 'unpause'];
 
   if (!validActions.includes(action)) {
-    return res.status(400).json({
-      error: `Ungültige Aktion. Erlaubt: ${validActions.join(', ')}`,
-    });
+    return res.status(400).json({ error: `Ungültige Aktion. Erlaubt: ${validActions.join(', ')}` });
   }
 
   const container = docker.getContainer(req.params.id);
-
-  // Aktion ausführen
   switch (action) {
     case 'start':   await container.start(); break;
     case 'stop':    await container.stop({ t: 10 }); break;
@@ -71,65 +86,55 @@ router.post('/containers/:id/action', async (req, res) => {
     case 'unpause': await container.unpause(); break;
   }
 
-  // Aktuellen Status zurückgeben
   const info = await container.inspect();
-  res.json({
-    message: `Aktion '${action}' erfolgreich ausgeführt`,
-    state: info.State,
-  });
+  res.json({ message: `Aktion '${action}' erfolgreich ausgeführt`, state: info.State });
 });
 
 /**
  * GET /docker/logs/:id
- * Container-Logs abrufen (letzte N Zeilen)
  */
 router.get('/logs/:id', async (req, res) => {
-  const { lines = 200, since = 0 } = req.query;
+  validateContainerId(req.params.id);
+  const lines = Math.min(parseInt(req.query.lines as string || '200', 10), 2000); // max 2000
+  const since = Math.max(0, parseInt(req.query.since as string || '0', 10));
   const container = docker.getContainer(req.params.id);
 
   const logBuffer = await container.logs({
-    stdout: true,
-    stderr: true,
-    tail: parseInt(lines),
-    since: parseInt(since),
-    timestamps: true,
+    stdout: true, stderr: true,
+    tail: lines, since, timestamps: true,
   });
 
-  // Docker Multiplexed Stream parsen
-  const logs = parseDockerLogs(logBuffer);
-  res.json({ logs, count: logs.length });
+  res.json({ logs: parseDockerLogs(logBuffer), count: lines });
 });
 
 /**
  * GET /docker/stats/:id
- * Container-Ressourcen (CPU, RAM) – einmalig
  */
 router.get('/stats/:id', async (req, res) => {
+  validateContainerId(req.params.id);
   const container = docker.getContainer(req.params.id);
   const stats = await container.stats({ stream: false });
 
   const cpuDelta = stats.cpu_stats.cpu_usage.total_usage - stats.precpu_stats.cpu_usage.total_usage;
   const systemDelta = stats.cpu_stats.system_cpu_usage - stats.precpu_stats.system_cpu_usage;
   const cpuCores = stats.cpu_stats.online_cpus || stats.cpu_stats.cpu_usage.percpu_usage?.length || 1;
-  const cpuPercent = (cpuDelta / systemDelta) * cpuCores * 100;
+  const cpuPercent = systemDelta > 0 ? (cpuDelta / systemDelta) * cpuCores * 100 : 0;
 
   const memUsage = stats.memory_stats.usage || 0;
   const memLimit = stats.memory_stats.limit || 1;
-  const memPercent = (memUsage / memLimit) * 100;
 
   res.json({
     cpu_percent: parseFloat(cpuPercent.toFixed(2)),
     memory_usage_mb: parseFloat((memUsage / 1024 / 1024).toFixed(2)),
     memory_limit_mb: parseFloat((memLimit / 1024 / 1024).toFixed(2)),
-    memory_percent: parseFloat(memPercent.toFixed(2)),
-    network_rx_bytes: Object.values(stats.networks || {}).reduce((a, n) => a + n.rx_bytes, 0),
-    network_tx_bytes: Object.values(stats.networks || {}).reduce((a, n) => a + n.tx_bytes, 0),
+    memory_percent: parseFloat(((memUsage / memLimit) * 100).toFixed(2)),
+    network_rx_bytes: Object.values(stats.networks || {}).reduce((a: number, n: any) => a + n.rx_bytes, 0),
+    network_tx_bytes: Object.values(stats.networks || {}).reduce((a: number, n: any) => a + n.tx_bytes, 0),
   });
 });
 
 /**
  * GET /docker/images
- * Alle lokalen Docker Images
  */
 router.get('/images', async (req, res) => {
   const images = await docker.listImages();
@@ -141,34 +146,47 @@ router.get('/images', async (req, res) => {
   })));
 });
 
-// ─── WebSocket Log-Streaming ──────────────────────────────────
+// ─── WebSocket Log-Streaming MIT JWT-Auth ─────────────────────
+// FIX: Token wird aus Query-Parameter ?token= gelesen und validiert,
+// da Browser-WebSocket keine Custom-Header unterstützt.
 function setupLogStream(wss) {
   wss.on('connection', async (ws, req) => {
-    // Container-ID aus URL extrahieren: /docker/logs/stream?id=abc123
     const url = new URL(req.url, 'http://localhost');
     const containerId = url.searchParams.get('id');
+    const token = url.searchParams.get('token');
 
-    if (!containerId) {
-      ws.send(JSON.stringify({ error: 'Container-ID fehlt' }));
-      ws.close();
+    // FIX: JWT-Authentifizierung für WebSocket
+    if (!token) {
+      ws.send(JSON.stringify({ error: 'Nicht autorisiert – kein Token' }));
+      ws.close(4001, 'Unauthorized');
+      return;
+    }
+    try {
+      jwt.verify(token, process.env.ADMIN_JWT_SECRET);
+    } catch {
+      ws.send(JSON.stringify({ error: 'Ungültiges oder abgelaufenes Token' }));
+      ws.close(4001, 'Unauthorized');
+      return;
+    }
+
+    // Container-ID validieren
+    try {
+      validateContainerId(containerId);
+    } catch {
+      ws.send(JSON.stringify({ error: 'Ungültige Container-ID' }));
+      ws.close(4000, 'Bad Request');
       return;
     }
 
     try {
       const container = docker.getContainer(containerId);
       const stream = await container.logs({
-        stdout: true,
-        stderr: true,
-        follow: true,
-        tail: 50,
-        timestamps: true,
+        stdout: true, stderr: true, follow: true, tail: 50, timestamps: true,
       });
 
-      // Log-Daten an WebSocket senden
       stream.on('data', (chunk) => {
         if (ws.readyState === ws.OPEN) {
-          const lines = parseDockerLogs(chunk);
-          lines.forEach(line => {
+          parseDockerLogs(chunk).forEach(line => {
             ws.send(JSON.stringify({ log: line }));
           });
         }
@@ -181,47 +199,31 @@ function setupLogStream(wss) {
         }
       });
 
-      ws.on('close', () => {
-        stream.destroy();
-      });
-    } catch (err) {
+      ws.on('close', () => stream.destroy());
+    } catch (err: any) {
       ws.send(JSON.stringify({ error: err.message }));
       ws.close();
     }
   });
 }
 
-// ─── Hilfsfunktion: Docker Multiplexed Log parsen ─────────────
 function parseDockerLogs(buffer) {
   const lines = [];
   let offset = 0;
-
   while (offset < buffer.length) {
     if (offset + 8 > buffer.length) break;
-
-    // Header: 8 Bytes (1 Byte Stream-Typ, 3 Byte Padding, 4 Byte Länge)
-    const streamType = buffer[offset]; // 1=stdout, 2=stderr
+    const streamType = buffer[offset];
     const size = buffer.readUInt32BE(offset + 4);
     offset += 8;
-
     if (offset + size > buffer.length) break;
-
     const line = buffer.slice(offset, offset + size).toString('utf8').trim();
-    if (line) {
-      lines.push({
-        stream: streamType === 2 ? 'stderr' : 'stdout',
-        text: line,
-      });
-    }
+    if (line) lines.push({ stream: streamType === 2 ? 'stderr' : 'stdout', text: line });
     offset += size;
   }
-
-  // Fallback: Wenn Parsing fehlschlägt, als Plain-Text behandeln
   if (lines.length === 0) {
     const text = buffer.toString('utf8').trim();
     if (text) lines.push({ stream: 'stdout', text });
   }
-
   return lines;
 }
 

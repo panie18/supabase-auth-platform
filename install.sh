@@ -272,6 +272,8 @@ ADMIN_USERNAME=${ADMIN_USER}
 ADMIN_PASSWORD=${ADMIN_PASS}
 ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET}
 GOTRUE_URL=http://gotrue:9999
+# CORS: Nur das Dashboard darf die API aufrufen
+ALLOWED_ORIGINS=https://${USER_DASH_SUB}
 
 # ─── Frontend ─────────────────────────────────────────────────
 NEXT_PUBLIC_API_URL=https://${USER_DASH_SUB}/api
@@ -285,6 +287,9 @@ CLOUDFLARE_TUNNEL_NAME=supabase-auth-tunnel
 NGINX_HTTP_PORT=80
 NGINX_HTTPS_PORT=443
 CERTBOT_EMAIL=${CERTBOT_MAIL}
+
+# ─── Auto-Updates (Watchtower) ────────────────────────────────
+WATCHTOWER_SLACK_WEBHOOK=
 
 # ─── Docker ───────────────────────────────────────────────────
 COMPOSE_PROJECT_NAME=supabase-auth
@@ -512,6 +517,90 @@ else
   log_warn "Kein bekannter Firewall-Manager gefunden"
   log_info "Stelle sicher, dass Port 80 und 443 geöffnet sind!"
 fi
+
+# =============================================================
+# SCHRITT 11: System-Sicherheit härten
+# =============================================================
+log_step "System-Sicherheit härten"
+
+# ─── unattended-upgrades (automatische Sicherheits-Updates) ──
+if command -v apt-get &>/dev/null; then
+  read -rp "  Automatische Sicherheits-Updates einrichten (unattended-upgrades)? (J/n): " setup_unattended
+  if [[ "${setup_unattended,,}" != "n" ]]; then
+    apt-get install -y -qq unattended-upgrades apt-listchanges
+
+    # Konfiguration schreiben
+    cat > /etc/apt/apt.conf.d/20auto-upgrades <<'AUTOUPGRADE'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::AutocleanInterval "7";
+AUTOUPGRADE
+
+    cat > /etc/apt/apt.conf.d/50unattended-upgrades <<'UNATTENDED'
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}";
+    "${distro_id}:${distro_codename}-security";
+    "${distro_id}ESMApps:${distro_codename}-apps-security";
+    "${distro_id}ESM:${distro_codename}-infra-security";
+};
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Mail "root";
+UNATTENDED
+
+    systemctl enable --now unattended-upgrades &>/dev/null || true
+    log_ok "unattended-upgrades eingerichtet (täglich, nur Security-Updates)"
+  fi
+
+  # ─── Fail2ban (Brute-Force-Schutz) ──────────────────────────
+  read -rp "  Fail2ban zum Schutz vor Brute-Force-Angriffen installieren? (J/n): " setup_fail2ban
+  if [[ "${setup_fail2ban,,}" != "n" ]]; then
+    apt-get install -y -qq fail2ban
+
+    # Jail-Konfiguration für SSH und Nginx
+    cat > /etc/fail2ban/jail.d/supabase-auth.conf <<FAIL2BAN
+[DEFAULT]
+bantime  = 3600
+findtime  = 600
+maxretry = 5
+backend = systemd
+
+[sshd]
+enabled = true
+port    = ssh
+logpath = /var/log/auth.log
+maxretry = 3
+
+[nginx-http-auth]
+enabled = true
+port    = http,https
+logpath = /var/log/nginx/error.log
+maxretry = 5
+
+[nginx-limit-req]
+enabled = true
+port    = http,https
+logpath = /var/log/nginx/error.log
+maxretry = 10
+findtime = 60
+FAIL2BAN
+
+    systemctl enable --now fail2ban &>/dev/null || true
+    systemctl restart fail2ban &>/dev/null || true
+    log_ok "Fail2ban eingerichtet (SSH + Nginx geschützt)"
+  fi
+else
+  log_warn "Überspringe unattended-upgrades/fail2ban (kein apt-get gefunden)"
+  log_info "Für andere Distros: dnf-automatic (RHEL/CentOS) verwenden"
+fi
+
+# ─── SSH Hardening Hinweis ────────────────────────────────────
+log_info "SSH-Sicherheitsempfehlungen:"
+log_info "  • Passwort-Login deaktivieren: PasswordAuthentication no"
+log_info "  • Root-Login deaktivieren: PermitRootLogin no"
+log_info "  • SSH-Key statt Passwort verwenden"
+log_info "  Datei: /etc/ssh/sshd_config"
 
 # =============================================================
 # ABSCHLUSS: Zusammenfassung

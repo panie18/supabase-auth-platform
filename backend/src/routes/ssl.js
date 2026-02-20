@@ -93,7 +93,7 @@ router.post('/request', async (req, res) => {
   try {
     domains.forEach(validateDomain);
     validateEmail(email);
-  } catch (err: any) {
+  } catch (err) {
     return res.status(400).json({ error: err.message });
   }
 
@@ -113,7 +113,7 @@ router.post('/request', async (req, res) => {
   try {
     const { stdout, stderr } = await execFileAsync('certbot', args, { timeout: 120000 });
     res.json({ success: true, message: 'SSL-Zertifikat erfolgreich ausgestellt', output: stdout || stderr, domains });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ success: false, error: 'Certbot-Fehler', details: err.stderr || err.message });
   }
 });
@@ -125,7 +125,7 @@ router.post('/renew', async (req, res) => {
   try {
     const { stdout, stderr } = await execFileAsync('certbot', ['renew', '--non-interactive'], { timeout: 120000 });
     res.json({ success: true, message: 'Zertifikate erfolgreich erneuert', output: stdout || stderr });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ success: false, error: 'Erneuerung fehlgeschlagen', details: err.stderr || err.message });
   }
 });
@@ -138,7 +138,7 @@ router.delete('/:domain', async (req, res) => {
   const { domain } = req.params;
   try {
     validateDomain(domain);
-  } catch (err: any) {
+  } catch (err) {
     return res.status(400).json({ error: err.message });
   }
 
@@ -147,7 +147,7 @@ router.delete('/:domain', async (req, res) => {
       'delete', '--non-interactive', '--cert-name', domain
     ], { timeout: 30000 });
     res.json({ success: true, message: 'Zertifikat gelöscht', output: stdout });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });

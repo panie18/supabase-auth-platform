@@ -128,8 +128,8 @@ router.get('/stats/:id', async (req, res) => {
     memory_usage_mb: parseFloat((memUsage / 1024 / 1024).toFixed(2)),
     memory_limit_mb: parseFloat((memLimit / 1024 / 1024).toFixed(2)),
     memory_percent: parseFloat(((memUsage / memLimit) * 100).toFixed(2)),
-    network_rx_bytes: Object.values(stats.networks || {}).reduce((a: number, n: any) => a + n.rx_bytes, 0),
-    network_tx_bytes: Object.values(stats.networks || {}).reduce((a: number, n: any) => a + n.tx_bytes, 0),
+    network_rx_bytes: Object.values(stats.networks || {}).reduce((a, n) => a + n.rx_bytes, 0),
+    network_tx_bytes: Object.values(stats.networks || {}).reduce((a, n) => a + n.tx_bytes, 0),
   });
 });
 
@@ -200,7 +200,7 @@ function setupLogStream(wss) {
       });
 
       ws.on('close', () => stream.destroy());
-    } catch (err: any) {
+    } catch (err) {
       ws.send(JSON.stringify({ error: err.message }));
       ws.close();
     }

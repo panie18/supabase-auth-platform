@@ -199,12 +199,13 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      WATCHTOWER_SCHEDULE: "0 0 4 * * *"        # Täglich 04:00 Uhr
-      WATCHTOWER_CLEANUP: "true"                 # Alte Images nach Update löschen
+      WATCHTOWER_SCHEDULE: "0 0 4 * * *"
+      WATCHTOWER_CLEANUP: "true"
       WATCHTOWER_INCLUDE_STOPPED: "false"
-      WATCHTOWER_LABEL_ENABLE: "true"            # Nur gelabelte Container
-      WATCHTOWER_ROLLING_RESTART: "true"         # Einzeln neustarten (kein Downtime)
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_ROLLING_RESTART: "true"
       WATCHTOWER_NOTIFICATION_SLACK_HOOK_URL: ${WATCHTOWER_SLACK_WEBHOOK:-}
+      DOCKER_API_VERSION: "1.44"
       TZ: "Europe/Berlin"
     labels:
       com.centurylinklabs.watchtower.enable: "false"  # Watchtower updatet sich nicht selbst

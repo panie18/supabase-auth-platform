@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================
-# Supabase Auth Platform - Vollautomatischer Installer
+# Supabase Auth Platform - Installer
 # =============================================================
 # Verwendung: sudo bash install.sh
-# Das Skript installiert und konfiguriert die gesamte
-# Supabase Auth Platform mit einem einzigen Befehl.
+#
+# Der Installer fragt nur das Minimum ab:
+#   - Server-IP / Domain
+#   - Admin-Passwort
+# Alles andere (Subdomain, SSL, Cloudflare, SMTP etc.)
+# wird im Dashboard-Onboarding konfiguriert.
 # =============================================================
 
 set -euo pipefail
@@ -21,71 +25,39 @@ log_info() { echo -e "  ${CYAN}ℹ${NC} $1"; }
 
 # ─── Banner ──────────────────────────────────────────────────
 echo -e "${BOLD}${CYAN}"
-cat <<'EOF'
+cat <<'BANNER'
   ╔═══════════════════════════════════════════════╗
-  ║   Supabase Auth Platform Installer v1.0       ║
+  ║   Supabase Auth Platform Installer v1.1       ║
   ║   Self-Hosted Authentication Dashboard        ║
   ╚═══════════════════════════════════════════════╝
-EOF
+BANNER
 echo -e "${NC}"
 
 # ─── Root-Check ──────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
-  log_warn "Nicht als Root ausgeführt. Manche Schritte könnten fehlschlagen."
+  log_warn "Nicht als Root ausgeführt. Bitte mit sudo starten."
   log_info "Empfehlung: sudo bash install.sh"
+  exit 1
 fi
 
-# ─── Konfiguration (Voreinstellungen) ────────────────────────
 INSTALL_DIR="${INSTALL_DIR:-$(pwd)}"
 ENV_FILE="$INSTALL_DIR/.env"
-COMPOSE_FILE="$INSTALL_DIR/docker-compose.yml"
 
 # =============================================================
-# SCHRITT 1: System-Abhängigkeiten prüfen
+# SCHRITT 1: Funktionen definieren (müssen VOR Aufrufen stehen)
 # =============================================================
-log_step "System-Abhängigkeiten prüfen"
 
+# Prüft ob ein Befehl verfügbar ist
 check_command() {
   if command -v "$1" &>/dev/null; then
-    log_ok "$1 gefunden: $(command -v "$1")"
+    log_ok "$1 gefunden"
     return 0
   else
     return 1
   fi
 }
 
-MISSING_DEPS=()
-
-# Docker prüfen
-if ! check_command docker; then
-  MISSING_DEPS+=("docker")
-  log_err "Docker nicht installiert"
-fi
-
-# Docker Compose prüfen (v2 Plugin oder v1 standalone)
-if docker compose version &>/dev/null 2>&1; then
-  log_ok "Docker Compose v2 (Plugin) verfügbar"
-  COMPOSE_CMD="docker compose"
-elif command -v docker-compose &>/dev/null; then
-  log_ok "Docker Compose v1 (Standalone) verfügbar"
-  COMPOSE_CMD="docker-compose"
-else
-  MISSING_DEPS+=("docker-compose")
-  log_err "Docker Compose nicht installiert"
-fi
-
-# Curl prüfen
-if ! check_command curl; then
-  log_warn "curl nicht installiert – einige Prüfungen werden übersprungen"
-fi
-
-# OpenSSL prüfen (für Secrets)
-if ! check_command openssl; then
-  MISSING_DEPS+=("openssl")
-  log_err "openssl nicht installiert"
-fi
-
-# Hilfsfunktion: Abhängigkeiten installieren (muss VOR dem Aufruf definiert sein)
+# Installiert fehlende Abhängigkeiten
 install_dependencies() {
   local deps=("$@")
   if command -v apt-get &>/dev/null; then
@@ -93,14 +65,18 @@ install_dependencies() {
     for dep in "${deps[@]}"; do
       case "$dep" in
         docker)
+          log_info "Installiere Docker…"
           curl -fsSL https://get.docker.com | sh
           systemctl enable --now docker
+          log_ok "Docker installiert"
           ;;
-        docker-compose)
-          apt-get install -y docker-compose-plugin
+        docker-compose-plugin)
+          apt-get install -y -qq docker-compose-plugin
+          log_ok "Docker Compose Plugin installiert"
           ;;
         openssl)
-          apt-get install -y openssl
+          apt-get install -y -qq openssl
+          log_ok "openssl installiert"
           ;;
       esac
     done
@@ -117,59 +93,100 @@ install_dependencies() {
       esac
     done
   else
-    log_err "Paketmanager nicht erkannt. Bitte manuell installieren."
+    log_err "Paketmanager nicht erkannt (kein apt-get / yum)."
+    log_info "Bitte Docker und openssl manuell installieren:"
+    log_info "  https://docs.docker.com/engine/install/"
     exit 1
   fi
 }
 
-# Fehlende Abhängigkeiten installieren?
+# =============================================================
+# SCHRITT 2: System-Abhängigkeiten prüfen
+# =============================================================
+log_step "System-Abhängigkeiten prüfen"
+
+# FIX: COMPOSE_CMD mit leerem Standardwert initialisieren
+# → verhindert "unbound variable" bei set -u
+COMPOSE_CMD=""
+MISSING_DEPS=()
+
+if ! check_command docker; then
+  MISSING_DEPS+=("docker")
+  log_err "Docker nicht installiert"
+fi
+
+# Docker Compose: v2 Plugin bevorzugt, v1 als Fallback
+if docker compose version &>/dev/null 2>&1; then
+  log_ok "Docker Compose v2 (Plugin) verfügbar"
+  COMPOSE_CMD="docker compose"
+elif command -v docker-compose &>/dev/null; then
+  log_ok "Docker Compose v1 (Standalone) verfügbar"
+  COMPOSE_CMD="docker-compose"
+else
+  MISSING_DEPS+=("docker-compose-plugin")
+  log_err "Docker Compose nicht installiert"
+fi
+
+if ! check_command openssl; then
+  MISSING_DEPS+=("openssl")
+  log_err "openssl nicht installiert"
+fi
+
+if ! check_command curl; then
+  log_warn "curl nicht gefunden – wird für Docker-Installation benötigt"
+  MISSING_DEPS+=("curl")
+fi
+
+# Fehlende Dependencies installieren
 if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
   echo ""
-  log_err "Fehlende Abhängigkeiten: ${MISSING_DEPS[*]}"
-  echo ""
-  read -rp "  Soll der Installer versuchen, diese automatisch zu installieren? (j/N): " auto_install
-  if [[ "${auto_install,,}" == "j" ]]; then
+  log_warn "Fehlende Abhängigkeiten: ${MISSING_DEPS[*]}"
+  read -rp "  Automatisch installieren? (J/n): " auto_install
+  if [[ "${auto_install,,}" != "n" ]]; then
     install_dependencies "${MISSING_DEPS[@]}"
+    # Nach Installation erneut prüfen
+    if docker compose version &>/dev/null 2>&1; then
+      COMPOSE_CMD="docker compose"
+    elif command -v docker-compose &>/dev/null; then
+      COMPOSE_CMD="docker-compose"
+    fi
   else
-    echo ""
-    log_err "Installation abgebrochen. Bitte installiere die fehlenden Abhängigkeiten manuell."
-    echo ""
-    echo "  Docker:  https://docs.docker.com/engine/install/"
-    echo "  Compose: https://docs.docker.com/compose/install/"
+    log_err "Bitte die Abhängigkeiten manuell installieren und erneut starten."
     exit 1
   fi
 fi
 
-log_ok "Alle Abhängigkeiten vorhanden"
-
-# =============================================================
-# SCHRITT 2: Konfiguration abfragen
-# =============================================================
-log_step "Konfiguration"
-
-echo ""
-echo -e "  ${BOLD}Domain-Konfiguration${NC}"
-echo "  ─────────────────────────────────────────"
-
-read -rp "  Deine Haupt-Domain (z.B. example.com): " USER_DOMAIN
-if [[ -z "$USER_DOMAIN" ]]; then
-  log_err "Domain ist erforderlich!"
+# Sicherstellen dass COMPOSE_CMD jetzt gesetzt ist
+if [[ -z "$COMPOSE_CMD" ]]; then
+  log_err "Docker Compose nicht gefunden – kann nicht fortfahren."
   exit 1
 fi
 
-# Standard-Subdomains vorschlagen
-DEFAULT_AUTH="auth.${USER_DOMAIN}"
-DEFAULT_DASH="dashboard.${USER_DOMAIN}"
+log_ok "Alle Abhängigkeiten vorhanden"
+log_info "Docker Compose Befehl: ${COMPOSE_CMD}"
 
-read -rp "  Auth-Subdomain [${DEFAULT_AUTH}]: " USER_AUTH_SUB
-USER_AUTH_SUB="${USER_AUTH_SUB:-$DEFAULT_AUTH}"
+# =============================================================
+# SCHRITT 3: Minimale Konfiguration abfragen
+# (Alles Weitere im Dashboard-Onboarding konfigurieren!)
+# =============================================================
+log_step "Minimale Konfiguration"
+echo ""
+echo -e "  ${CYAN}Tipp: Domain, Subdomain, SSL, Cloudflare & SMTP${NC}"
+echo -e "  ${CYAN}werden nach dem Start im Dashboard-Onboarding${NC}"
+echo -e "  ${CYAN}bequem per Klick konfiguriert.${NC}"
+echo ""
+echo "  ─────────────────────────────────────────────"
 
-read -rp "  Dashboard-Subdomain [${DEFAULT_DASH}]: " USER_DASH_SUB
-USER_DASH_SUB="${USER_DASH_SUB:-$DEFAULT_DASH}"
+# Server-IP automatisch ermitteln
+SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
+log_info "Erkannte Server-IP: ${SERVER_IP}"
+
+read -rp "  Deine Domain (z.B. example.com, Enter für IP-Modus): " USER_DOMAIN
+USER_DOMAIN="${USER_DOMAIN:-$SERVER_IP}"
 
 echo ""
-echo -e "  ${BOLD}Admin-Zugangsdaten${NC}"
-echo "  ─────────────────────────────────────────"
+echo -e "  ${BOLD}Admin-Login für das Dashboard${NC}"
+echo "  ─────────────────────────────────────────────"
 
 read -rp "  Admin-Benutzername [admin]: " ADMIN_USER
 ADMIN_USER="${ADMIN_USER:-admin}"
@@ -180,63 +197,57 @@ while true; do
   if [[ ${#ADMIN_PASS} -ge 12 ]]; then
     break
   fi
-  log_warn "Passwort zu kurz! Mindestens 12 Zeichen erforderlich."
+  log_warn "Passwort zu kurz – mindestens 12 Zeichen!"
 done
 
-echo ""
-echo -e "  ${BOLD}Datenbank${NC}"
-echo "  ─────────────────────────────────────────"
+# Standard-Subdomains ableiten
+AUTH_SUB="auth.${USER_DOMAIN}"
+DASH_SUB="dashboard.${USER_DOMAIN}"
 
-read -rp "  PostgreSQL Passwort (Enter = zufällig generieren): " PG_PASS
-if [[ -z "$PG_PASS" ]]; then
-  PG_PASS=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 24)
-  log_info "Zufälliges DB-Passwort generiert"
-fi
-
-echo ""
-echo -e "  ${BOLD}E-Mail (für Certbot/SSL)${NC}"
-echo "  ─────────────────────────────────────────"
-read -rp "  E-Mail-Adresse für SSL-Zertifikate: " CERTBOT_MAIL
-
-echo ""
-echo -e "  ${BOLD}Optionale Features${NC}"
-echo "  ─────────────────────────────────────────"
-read -rp "  SSL via Let's Encrypt einrichten? (j/N): " SETUP_SSL
-read -rp "  Cloudflare Tunnel konfigurieren? (j/N): " SETUP_TUNNEL
-
-if [[ "${SETUP_TUNNEL,,}" == "j" ]]; then
-  read -rp "  Cloudflare Tunnel Token (aus Cloudflare Dashboard): " CF_TOKEN
+# Bei IP-Modus: Subdomains können nicht funktionieren → Port-Modus
+IS_IP=false
+if [[ "$USER_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  IS_IP=true
+  AUTH_SUB="${USER_DOMAIN}"
+  DASH_SUB="${USER_DOMAIN}"
+  log_info "IP-Modus erkannt – Dashboard läuft auf http://${USER_DOMAIN}:80"
 fi
 
 # =============================================================
-# SCHRITT 3: Secrets generieren
+# SCHRITT 4: Secrets generieren
 # =============================================================
 log_step "Sichere Secrets generieren"
 
 JWT_SECRET=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 48)
 OPERATOR_TOKEN=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32)
 ADMIN_JWT_SECRET=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32)
+PG_PASS=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 24)
 
-log_ok "JWT_SECRET generiert (48 Zeichen)"
-log_ok "OPERATOR_TOKEN generiert (32 Zeichen)"
-log_ok "ADMIN_JWT_SECRET generiert (32 Zeichen)"
+log_ok "JWT_SECRET generiert"
+log_ok "OPERATOR_TOKEN generiert"
+log_ok "ADMIN_JWT_SECRET generiert"
+log_ok "PostgreSQL-Passwort generiert"
 
 # =============================================================
-# SCHRITT 4: .env Datei erstellen
+# SCHRITT 5: .env Datei erstellen
 # =============================================================
 log_step ".env Datei erstellen"
 
 cat > "$ENV_FILE" <<ENV
 # =============================================================
-# Supabase Auth Platform - Konfiguration
+# Supabase Auth Platform – Konfiguration
 # Generiert am: $(date)
-# DIESE DATEI NICHT COMMITTEN! (enthält Secrets)
+# ONBOARDING_DONE=false  ← wird vom Dashboard auf true gesetzt
 # =============================================================
+
+# ─── Onboarding-Status ────────────────────────────────────────
+# false = Dashboard zeigt Einrichtungsassistenten
+ONBOARDING_DONE=false
 
 # ─── Domain ──────────────────────────────────────────────────
 DOMAIN=${USER_DOMAIN}
-AUTH_SUBDOMAIN=${USER_AUTH_SUB}
-DASHBOARD_SUBDOMAIN=${USER_DASH_SUB}
+AUTH_SUBDOMAIN=${AUTH_SUB}
+DASHBOARD_SUBDOMAIN=${DASH_SUB}
 
 # ─── PostgreSQL ───────────────────────────────────────────────
 POSTGRES_HOST=postgres
@@ -253,15 +264,15 @@ GOTRUE_JWT_DEFAULT_GROUP_NAME=authenticated
 GOTRUE_JWT_AUD=authenticated
 GOTRUE_OPERATOR_TOKEN=${OPERATOR_TOKEN}
 GOTRUE_DISABLE_SIGNUP=false
-GOTRUE_SITE_URL=https://${USER_DOMAIN}
-GOTRUE_API_EXTERNAL_URL=https://${USER_AUTH_SUB}
+GOTRUE_SITE_URL=http://${USER_DOMAIN}
+GOTRUE_API_EXTERNAL_URL=http://${AUTH_SUB}
 
-# E-Mail (optional, für Bestätigungs-Mails)
+# E-Mail – im Dashboard konfigurieren
 GOTRUE_SMTP_HOST=
 GOTRUE_SMTP_PORT=587
 GOTRUE_SMTP_USER=
 GOTRUE_SMTP_PASS=
-GOTRUE_SMTP_ADMIN_EMAIL=${CERTBOT_MAIL:-noreply@${USER_DOMAIN}}
+GOTRUE_SMTP_ADMIN_EMAIL=noreply@${USER_DOMAIN}
 GOTRUE_MAILER_AUTOCONFIRM=true
 
 # ─── Backend API ──────────────────────────────────────────────
@@ -270,21 +281,20 @@ ADMIN_USERNAME=${ADMIN_USER}
 ADMIN_PASSWORD=${ADMIN_PASS}
 ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET}
 GOTRUE_URL=http://gotrue:9999
-# CORS: Nur das Dashboard darf die API aufrufen
-ALLOWED_ORIGINS=https://${USER_DASH_SUB}
+ALLOWED_ORIGINS=http://${DASH_SUB},https://${DASH_SUB}
 
 # ─── Frontend ─────────────────────────────────────────────────
-NEXT_PUBLIC_API_URL=https://${USER_DASH_SUB}/api
+NEXT_PUBLIC_API_URL=/api
 FRONTEND_PORT=3000
 
-# ─── Cloudflare Tunnel ────────────────────────────────────────
-CLOUDFLARE_TUNNEL_TOKEN=${CF_TOKEN:-}
+# ─── Cloudflare Tunnel – im Dashboard konfigurieren ──────────
+CLOUDFLARE_TUNNEL_TOKEN=
 CLOUDFLARE_TUNNEL_NAME=supabase-auth-tunnel
 
 # ─── Nginx ────────────────────────────────────────────────────
 NGINX_HTTP_PORT=80
 NGINX_HTTPS_PORT=443
-CERTBOT_EMAIL=${CERTBOT_MAIL}
+CERTBOT_EMAIL=
 
 # ─── Auto-Updates (Watchtower) ────────────────────────────────
 WATCHTOWER_SLACK_WEBHOOK=
@@ -293,341 +303,215 @@ WATCHTOWER_SLACK_WEBHOOK=
 COMPOSE_PROJECT_NAME=supabase-auth
 ENV
 
-# Sicherheitsrechte setzen (nur root/owner darf lesen)
 chmod 600 "$ENV_FILE"
 log_ok ".env erstellt: $ENV_FILE"
 
 # =============================================================
-# SCHRITT 5: Nginx-Konfiguration vorbereiten
+# SCHRITT 6: Nginx HTTP-Konfiguration erstellen
 # =============================================================
-log_step "Nginx-Konfiguration vorbereiten"
+log_step "Nginx-Basiskonfiguration"
+mkdir -p "$INSTALL_DIR/nginx/conf.d" "$INSTALL_DIR/cloudflare"
 
-mkdir -p "$INSTALL_DIR/nginx/conf.d"
-
-# Wenn noch kein SSL: HTTP-only Fallback-Config erstellen
-# (wird nach SSL-Setup durch die Template-Config ersetzt)
-cat > "$INSTALL_DIR/nginx/conf.d/default.conf" <<NGINX
-# Temporäre HTTP-Konfiguration (bis SSL eingerichtet ist)
-# Wird automatisch durch die SSL-Konfiguration ersetzt.
-
-limit_req_zone \$binary_remote_addr zone=auth_limit:10m rate=10r/s;
-limit_req_zone \$binary_remote_addr zone=api_limit:10m rate=30r/s;
+cat > "$INSTALL_DIR/nginx/conf.d/default.conf" <<'NGINX'
+# HTTP-Basiskonfiguration (SSL wird im Dashboard konfiguriert)
+limit_req_zone $binary_remote_addr zone=auth:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=api:10m rate=30r/s;
 
 server {
     listen 80 default_server;
     server_name _;
 
-    # Let's Encrypt ACME Challenge
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }
 
-    # Backend API
     location /api/ {
-        limit_req zone=api_limit burst=50 nodelay;
+        limit_req zone=api burst=50 nodelay;
         proxy_pass http://backend:4000/;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Upgrade \$http_upgrade;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_read_timeout 3600s;
     }
 
-    # Dashboard Frontend
     location / {
         proxy_pass http://frontend:3000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_cache_bypass $http_upgrade;
     }
 }
 
-# Auth API (GoTrue) direkt auf Port 9999 intern
-# Wird nach SSL-Setup via HTTPS auf ${USER_AUTH_SUB} exponiert
 server {
     listen 80;
-    server_name ${USER_AUTH_SUB};
+    server_name ~^auth\.;
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }
 
     location / {
-        limit_req zone=auth_limit burst=20 nodelay;
+        limit_req zone=auth burst=20 nodelay;
         proxy_pass http://gotrue:9999;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 NGINX
 
-log_ok "Nginx HTTP-Konfiguration erstellt"
+log_ok "Nginx-Konfiguration erstellt"
 
 # =============================================================
-# SCHRITT 6: Cloudflare-Verzeichnis erstellen
-# =============================================================
-mkdir -p "$INSTALL_DIR/cloudflare"
-
-# =============================================================
-# SCHRITT 7: Docker Images bauen und Container starten
+# SCHRITT 7: Docker Container bauen und starten
 # =============================================================
 log_step "Docker Container bauen und starten"
 
 cd "$INSTALL_DIR"
 
-log_info "Docker Images werden gebaut (kann 2-5 Minuten dauern)…"
+log_info "Docker Images werden gebaut (2–5 Minuten)…"
 $COMPOSE_CMD build --no-cache
 
-log_info "PostgreSQL und GoTrue starten…"
+log_info "PostgreSQL starten und warten…"
 $COMPOSE_CMD up -d postgres
-sleep 5
 
-log_info "Warte auf PostgreSQL…"
 for i in {1..30}; do
-  if $COMPOSE_CMD exec postgres pg_isready -U supabase &>/dev/null; then
+  if $COMPOSE_CMD exec -T postgres pg_isready -U supabase &>/dev/null; then
     log_ok "PostgreSQL bereit"
     break
   fi
   if [[ $i -eq 30 ]]; then
-    log_err "PostgreSQL startet nicht. Logs:"
+    log_err "PostgreSQL startet nicht!"
     $COMPOSE_CMD logs postgres
     exit 1
   fi
   sleep 2
 done
 
-log_info "GoTrue starten…"
+log_info "GoTrue starten und warten…"
 $COMPOSE_CMD up -d gotrue
 sleep 5
 
-log_info "Warte auf GoTrue…"
-for i in {1..30}; do
-  if $COMPOSE_CMD exec gotrue wget -qO- http://localhost:9999/health &>/dev/null; then
+for i in {1..20}; do
+  if $COMPOSE_CMD exec -T gotrue wget -qO- http://localhost:9999/health &>/dev/null; then
     log_ok "GoTrue bereit"
     break
   fi
   sleep 3
 done
 
-log_info "Backend, Frontend und Nginx starten…"
+log_info "Backend, Frontend, Nginx starten…"
 $COMPOSE_CMD up -d
 
 log_ok "Alle Container gestartet"
-
-# Status anzeigen
 echo ""
 $COMPOSE_CMD ps
 
 # =============================================================
-# SCHRITT 8: SSL-Zertifikate anfordern (optional)
-# =============================================================
-if [[ "${SETUP_SSL,,}" == "j" ]]; then
-  log_step "SSL-Zertifikate anfordern (Let's Encrypt)"
-
-  log_info "Warte 10 Sekunden damit Nginx vollständig gestartet ist…"
-  sleep 10
-
-  log_info "DNS-Auflösung prüfen…"
-  for domain in "$USER_DOMAIN" "$USER_AUTH_SUB" "$USER_DASH_SUB"; do
-    if host "$domain" &>/dev/null; then
-      log_ok "DNS für $domain auflösbar"
-    else
-      log_warn "DNS für $domain nicht auflösbar – bitte DNS-Records prüfen!"
-    fi
-  done
-
-  log_info "Certbot-Zertifikate anfordern…"
-  $COMPOSE_CMD run --rm \
-    -v "$(pwd)/certbot-certs:/etc/letsencrypt" \
-    -v "$(pwd)/certbot-webroot:/var/www/certbot" \
-    certbot certonly \
-      --webroot -w /var/www/certbot \
-      --email "$CERTBOT_MAIL" \
-      --agree-tos --no-eff-email \
-      -d "$USER_DOMAIN" \
-      -d "$USER_AUTH_SUB" \
-      -d "$USER_DASH_SUB" || {
-    log_warn "SSL-Zertifikat konnte nicht ausgestellt werden."
-    log_info "Du kannst es später über das Dashboard versuchen (SSL → Neues Zertifikat)."
-    log_info "DNS-Records müssen auf diesen Server zeigen, bevor SSL funktioniert."
-  }
-
-  if [[ -d "certbot-certs/live/$USER_DOMAIN" ]]; then
-    log_ok "SSL-Zertifikat erfolgreich ausgestellt!"
-
-    # Nginx SSL-Konfiguration aktivieren
-    log_info "Nginx SSL-Konfiguration wird aktiviert…"
-    envsubst '${DOMAIN} ${AUTH_SUBDOMAIN} ${DASHBOARD_SUBDOMAIN}' \
-      < "$INSTALL_DIR/nginx/templates/default.conf.template" \
-      > "$INSTALL_DIR/nginx/conf.d/default.conf"
-
-    $COMPOSE_CMD restart nginx
-    log_ok "Nginx mit SSL neu gestartet"
-
-    # Auto-Renewal Cron einrichten
-    log_info "Auto-Renewal Cron-Job einrichten…"
-    CRON_JOB="0 0 * * 0 cd $INSTALL_DIR && $COMPOSE_CMD run --rm certbot renew --quiet && $COMPOSE_CMD restart nginx"
-    (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab - || log_warn "Cron-Job konnte nicht eingerichtet werden"
-    log_ok "Auto-Renewal Cron (wöchentlich) eingerichtet"
-  fi
-fi
-
-# =============================================================
-# SCHRITT 9: Cloudflare Tunnel starten (optional)
-# =============================================================
-if [[ "${SETUP_TUNNEL,,}" == "j" ]] && [[ -n "${CF_TOKEN:-}" ]]; then
-  log_step "Cloudflare Tunnel starten"
-  $COMPOSE_CMD --profile tunnel up -d cloudflared
-  log_ok "Cloudflare Tunnel gestartet"
-fi
-
-# =============================================================
-# SCHRITT 10: Firewall-Regeln setzen (optional)
+# SCHRITT 8: Firewall (optional)
 # =============================================================
 log_step "Firewall-Konfiguration"
 
 if command -v ufw &>/dev/null; then
-  log_info "UFW Firewall gefunden"
-  read -rp "  Firewall-Regeln automatisch setzen (Port 80, 443)? (j/N): " setup_fw
-  if [[ "${setup_fw,,}" == "j" ]]; then
-    ufw allow 22/tcp   # SSH
-    ufw allow 80/tcp   # HTTP
-    ufw allow 443/tcp  # HTTPS
+  read -rp "  UFW-Firewall einrichten (Port 22, 80, 443)? (J/n): " setup_fw
+  if [[ "${setup_fw,,}" != "n" ]]; then
+    ufw allow 22/tcp comment "SSH"
+    ufw allow 80/tcp comment "HTTP"
+    ufw allow 443/tcp comment "HTTPS"
     ufw --force enable
-    log_ok "Firewall konfiguriert (Ports 22, 80, 443 offen)"
+    log_ok "UFW konfiguriert"
   fi
 elif command -v firewall-cmd &>/dev/null; then
-  log_info "firewalld gefunden"
-  read -rp "  Firewall-Regeln automatisch setzen? (j/N): " setup_fw
-  if [[ "${setup_fw,,}" == "j" ]]; then
-    firewall-cmd --permanent --add-service=http
-    firewall-cmd --permanent --add-service=https
+  read -rp "  firewalld einrichten? (J/n): " setup_fw
+  if [[ "${setup_fw,,}" != "n" ]]; then
+    firewall-cmd --permanent --add-service={http,https,ssh}
     firewall-cmd --reload
-    log_ok "Firewall konfiguriert"
+    log_ok "firewalld konfiguriert"
   fi
 else
-  log_warn "Kein bekannter Firewall-Manager gefunden"
-  log_info "Stelle sicher, dass Port 80 und 443 geöffnet sind!"
+  log_warn "Kein Firewall-Manager – bitte Port 80 und 443 manuell öffnen"
 fi
 
 # =============================================================
-# SCHRITT 11: System-Sicherheit härten
+# SCHRITT 9: System-Sicherheit (Debian/Ubuntu)
 # =============================================================
-log_step "System-Sicherheit härten"
-
-# ─── unattended-upgrades (automatische Sicherheits-Updates) ──
 if command -v apt-get &>/dev/null; then
-  read -rp "  Automatische Sicherheits-Updates einrichten (unattended-upgrades)? (J/n): " setup_unattended
+  log_step "System-Sicherheit härten"
+
+  read -rp "  Automatische Sicherheits-Updates einrichten? (J/n): " setup_unattended
   if [[ "${setup_unattended,,}" != "n" ]]; then
-    apt-get install -y -qq unattended-upgrades apt-listchanges
-
-    # Konfiguration schreiben
-    cat > /etc/apt/apt.conf.d/20auto-upgrades <<'AUTOUPGRADE'
-APT::Periodic::Update-Package-Lists "1";
+    apt-get install -y -qq unattended-upgrades
+    echo 'APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
-APT::Periodic::Download-Upgradeable-Packages "1";
-APT::Periodic::AutocleanInterval "7";
-AUTOUPGRADE
-
-    cat > /etc/apt/apt.conf.d/50unattended-upgrades <<'UNATTENDED'
-Unattended-Upgrade::Allowed-Origins {
-    "${distro_id}:${distro_codename}";
-    "${distro_id}:${distro_codename}-security";
-    "${distro_id}ESMApps:${distro_codename}-apps-security";
-    "${distro_id}ESM:${distro_codename}-infra-security";
-};
-Unattended-Upgrade::Remove-Unused-Dependencies "true";
-Unattended-Upgrade::Automatic-Reboot "false";
-Unattended-Upgrade::Mail "root";
-UNATTENDED
-
+APT::Periodic::AutocleanInterval "7";' > /etc/apt/apt.conf.d/20auto-upgrades
     systemctl enable --now unattended-upgrades &>/dev/null || true
-    log_ok "unattended-upgrades eingerichtet (täglich, nur Security-Updates)"
+    log_ok "unattended-upgrades aktiviert"
   fi
 
-  # ─── Fail2ban (Brute-Force-Schutz) ──────────────────────────
-  read -rp "  Fail2ban zum Schutz vor Brute-Force-Angriffen installieren? (J/n): " setup_fail2ban
-  if [[ "${setup_fail2ban,,}" != "n" ]]; then
+  read -rp "  Fail2ban (Brute-Force-Schutz) installieren? (J/n): " setup_f2b
+  if [[ "${setup_f2b,,}" != "n" ]]; then
     apt-get install -y -qq fail2ban
-
-    # Jail-Konfiguration für SSH und Nginx
-    cat > /etc/fail2ban/jail.d/supabase-auth.conf <<FAIL2BAN
+    cat > /etc/fail2ban/jail.d/supabase-auth.conf <<'F2B'
 [DEFAULT]
-bantime  = 3600
-findtime  = 600
+bantime = 3600
+findtime = 600
 maxretry = 5
-backend = systemd
 
 [sshd]
 enabled = true
-port    = ssh
-logpath = /var/log/auth.log
 maxretry = 3
-
-[nginx-http-auth]
-enabled = true
-port    = http,https
-logpath = /var/log/nginx/error.log
-maxretry = 5
 
 [nginx-limit-req]
 enabled = true
 port    = http,https
 logpath = /var/log/nginx/error.log
 maxretry = 10
-findtime = 60
-FAIL2BAN
-
+F2B
     systemctl enable --now fail2ban &>/dev/null || true
-    systemctl restart fail2ban &>/dev/null || true
-    log_ok "Fail2ban eingerichtet (SSH + Nginx geschützt)"
+    log_ok "Fail2ban eingerichtet"
   fi
-else
-  log_warn "Überspringe unattended-upgrades/fail2ban (kein apt-get gefunden)"
-  log_info "Für andere Distros: dnf-automatic (RHEL/CentOS) verwenden"
 fi
 
-# ─── SSH Hardening Hinweis ────────────────────────────────────
-log_info "SSH-Sicherheitsempfehlungen:"
-log_info "  • Passwort-Login deaktivieren: PasswordAuthentication no"
-log_info "  • Root-Login deaktivieren: PermitRootLogin no"
-log_info "  • SSH-Key statt Passwort verwenden"
-log_info "  Datei: /etc/ssh/sshd_config"
+# =============================================================
+# ABSCHLUSS
+# =============================================================
+PROTO="http"
 
-# =============================================================
-# ABSCHLUSS: Zusammenfassung
-# =============================================================
 echo ""
 echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════${NC}"
-echo -e "${BOLD}${GREEN}  Installation erfolgreich abgeschlossen!${NC}"
+echo -e "${BOLD}${GREEN}  Installation abgeschlossen!${NC}"
 echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════${NC}"
 echo ""
-echo -e "  ${BOLD}URLs:${NC}"
-echo -e "  Dashboard:  ${CYAN}http${[[ "${SETUP_SSL,,}" == "j" ]] && echo "s"}://${USER_DASH_SUB}${NC}"
-echo -e "  Auth API:   ${CYAN}http${[[ "${SETUP_SSL,,}" == "j" ]] && echo "s"}://${USER_AUTH_SUB}${NC}"
+echo -e "  ${BOLD}Dashboard öffnen:${NC}"
+if $IS_IP; then
+  echo -e "  ${CYAN}${PROTO}://${USER_DOMAIN}${NC}  (Port 80)"
+else
+  echo -e "  ${CYAN}${PROTO}://${DASH_SUB}${NC}"
+fi
 echo ""
-echo -e "  ${BOLD}Login-Daten:${NC}"
+echo -e "  ${BOLD}Login:${NC}"
 echo -e "  Benutzername: ${YELLOW}${ADMIN_USER}${NC}"
 echo -e "  Passwort:     ${YELLOW}(dein gewähltes Passwort)${NC}"
 echo ""
-echo -e "  ${BOLD}Nächste Schritte:${NC}"
-echo -e "  1. DNS-Records einrichten (A-Records → Server-IP)"
-echo -e "  2. Dashboard öffnen und erste Benutzer anlegen"
-echo -e "  3. SSL-Zertifikate im Dashboard beantragen"
-echo -e "  4. SMTP für E-Mail-Bestätigung konfigurieren"
+echo -e "  ${BOLD}${CYAN}Nach dem Login startet der Einrichtungsassistent:${NC}"
+echo -e "  • Domain & Subdomains konfigurieren"
+echo -e "  • SSL-Zertifikat beantragen"
+echo -e "  • Cloudflare Tunnel einrichten"
+echo -e "  • SMTP / E-Mail konfigurieren"
 echo ""
 echo -e "  ${BOLD}Nützliche Befehle:${NC}"
-echo -e "  Logs:      ${CYAN}$COMPOSE_CMD logs -f${NC}"
-echo -e "  Status:    ${CYAN}$COMPOSE_CMD ps${NC}"
-echo -e "  Stoppen:   ${CYAN}$COMPOSE_CMD down${NC}"
-echo -e "  Starten:   ${CYAN}$COMPOSE_CMD up -d${NC}"
+echo -e "  Logs:    ${CYAN}${COMPOSE_CMD} logs -f${NC}"
+echo -e "  Status:  ${CYAN}${COMPOSE_CMD} ps${NC}"
+echo -e "  Stop:    ${CYAN}${COMPOSE_CMD} down${NC}"
 echo ""
-echo -e "  ${RED}WICHTIG:${NC} Die .env-Datei enthält Secrets!"
-echo -e "  Backup erstellen: ${CYAN}cp $ENV_FILE $ENV_FILE.backup${NC}"
+echo -e "  ${RED}WICHTIG:${NC} .env enthält Secrets → sicher aufbewahren!"
+echo -e "  Backup:  ${CYAN}cp ${ENV_FILE} ${ENV_FILE}.backup${NC}"
 echo ""

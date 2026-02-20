@@ -18,6 +18,7 @@ const domainsRouter = require('./routes/domains');
 const sslRouter = require('./routes/ssl');
 const tunnelRouter = require('./routes/tunnel');
 const envRouter = require('./routes/env');
+const onboardingRouter = require('./routes/onboarding');
 
 const app = express();
 const server = http.createServer(app);
@@ -110,6 +111,7 @@ app.use('/domains', adminAuth, domainsRouter);
 app.use('/ssl', adminAuth, sslRouter);
 app.use('/tunnel', adminAuth, tunnelRouter);
 app.use('/env', adminAuth, envWriteLimiter, envRouter);
+app.use('/onboarding', adminAuth, onboardingRouter);
 
 // ─── WebSocket: JWT-Auth erfolgt in docker.js setupLogStream ──
 const wss = new WebSocketServer({ server, path: '/docker/logs/stream' });

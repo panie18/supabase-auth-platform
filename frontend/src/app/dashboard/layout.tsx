@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Sidebar } from "@/components/layout/sidebar";
 import { isAuthenticated } from "@/lib/auth";
+import { onboardingApi } from "@/lib/api";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -13,9 +14,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     if (!isAuthenticated()) {
       router.replace("/login");
-    } else {
-      setChecked(true);
+      return;
     }
+    onboardingApi.status()
+      .then((res) => {
+        if (!res.data.done) {
+          router.replace("/onboarding");
+        } else {
+          setChecked(true);
+        }
+      })
+      .catch(() => {
+        // If check fails assume onboarding is done (already configured systems)
+        setChecked(true);
+      });
   }, [router]);
 
   if (!checked) {

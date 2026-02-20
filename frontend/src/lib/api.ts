@@ -105,6 +105,20 @@ export const tunnelApi = {
   deleteConfig: () => api.delete("/tunnel/config"),
 };
 
+// ─── Onboarding ───────────────────────────────────────────────
+export const onboardingApi = {
+  status: () => api.get("/onboarding/status"),
+  saveDomain: (data: { domain: string; auth_subdomain?: string; dashboard_subdomain?: string }) =>
+    api.post("/onboarding/domain", data),
+  saveSSL: (email: string) => api.post("/onboarding/ssl", { email }),
+  saveTunnel: (token: string) => api.post("/onboarding/tunnel", { token }),
+  skipTunnel: () => api.post("/onboarding/tunnel", { skip: true }),
+  saveSMTP: (data: { host: string; port?: number; user: string; pass: string; from_email?: string }) =>
+    api.post("/onboarding/smtp", data),
+  skipSMTP: () => api.post("/onboarding/smtp", { skip: true }),
+  complete: () => api.post("/onboarding/complete"),
+};
+
 // ─── ENV / Einstellungen ──────────────────────────────────────
 export const envApi = {
   get: () => api.get("/env"),

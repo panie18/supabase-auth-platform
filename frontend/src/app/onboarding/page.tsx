@@ -445,6 +445,8 @@ function SMTPStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }
 function DoneStep({ onFinish }: { onFinish: () => void }) {
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
+  const serverIp = typeof window !== "undefined" ? window.location.hostname : "DEINE-IP";
+  const port = typeof window !== "undefined" ? window.location.port : "3000";
 
   async function handleFinish() {
     setLoading(true);
@@ -469,16 +471,43 @@ function DoneStep({ onFinish }: { onFinish: () => void }) {
       <div>
         <h2 className="text-2xl font-bold">Einrichtung abgeschlossen!</h2>
         <p className="text-muted-foreground mt-2">
-          Deine Supabase Auth Platform ist bereit. Du kannst alle Einstellungen
-          jederzeit im Dashboard unter <strong>Einstellungen</strong> anpassen.
+          Deine Supabase Auth Platform ist bereit.
         </p>
+      </div>
+
+      {/* Server-Info */}
+      <div className="rounded-md border bg-muted/50 p-4 text-sm text-left space-y-3">
+        <p className="font-semibold flex items-center gap-2">
+          <Server className="h-4 w-4" /> Server-Informationen
+        </p>
+        <div className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 font-mono text-xs">
+          <span className="text-muted-foreground">IP-Adresse</span>
+          <span className="font-semibold">{serverIp}</span>
+          <span className="text-muted-foreground">Dashboard (direkt)</span>
+          <span className="font-semibold">Port <span className="text-primary">{port || "3000"}</span></span>
+          <span className="text-muted-foreground">Dashboard (Nginx)</span>
+          <span className="font-semibold">Port <span className="text-primary">80</span> / <span className="text-primary">443</span></span>
+          <span className="text-muted-foreground">Auth-API</span>
+          <span className="font-semibold">Port <span className="text-primary">9999</span> (intern)</span>
+        </div>
+      </div>
+
+      {/* Firewall-Hinweis */}
+      <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3 text-xs text-yellow-800 text-left space-y-1">
+        <p className="font-semibold">Firewall – diese Ports öffnen:</p>
+        <div className="font-mono space-y-0.5">
+          <p>ufw allow 80/tcp    <span className="text-yellow-600"># HTTP</span></p>
+          <p>ufw allow 443/tcp   <span className="text-yellow-600"># HTTPS</span></p>
+          <p>ufw allow 3000/tcp  <span className="text-yellow-600"># Dashboard direkt</span></p>
+          <p>ufw enable</p>
+        </div>
       </div>
 
       <div className="rounded-md bg-muted p-4 text-sm text-left space-y-2">
         <p className="font-medium">Nächste Schritte:</p>
         <ul className="space-y-1 text-muted-foreground">
           <li className="flex items-center gap-2"><CheckCircle className="h-3.5 w-3.5 text-green-500 shrink-0" /> Erste Benutzer unter <strong>Benutzer</strong> anlegen</li>
-          <li className="flex items-center gap-2"><CheckCircle className="h-3.5 w-3.5 text-green-500 shrink-0" /> Auth-API in deiner App einbinden (<code className="bg-background px-1 rounded text-xs">/auth/v1/signup</code>)</li>
+          <li className="flex items-center gap-2"><CheckCircle className="h-3.5 w-3.5 text-green-500 shrink-0" /> Auth-API einbinden: <code className="bg-background px-1 rounded text-xs">http://{serverIp}:9999/auth/v1/signup</code></li>
           <li className="flex items-center gap-2"><CheckCircle className="h-3.5 w-3.5 text-green-500 shrink-0" /> Container-Status unter <strong>Container</strong> prüfen</li>
         </ul>
       </div>

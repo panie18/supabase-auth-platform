@@ -303,7 +303,7 @@ WATCHTOWER_SLACK_WEBHOOK=
 COMPOSE_PROJECT_NAME=supabase-auth
 ENV
 
-chmod 600 "$ENV_FILE"
+chmod 660 "$ENV_FILE"
 log_ok ".env erstellt: $ENV_FILE"
 
 # =============================================================

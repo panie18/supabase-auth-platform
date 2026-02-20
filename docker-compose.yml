@@ -95,6 +95,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: auth-backend
+    user: "0"   # root – braucht Docker-Socket + .env schreiben
     restart: unless-stopped
     depends_on:
       gotrue:

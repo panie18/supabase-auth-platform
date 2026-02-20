@@ -85,6 +85,43 @@ if ! check_command openssl; then
   log_err "openssl nicht installiert"
 fi
 
+# Hilfsfunktion: Abhängigkeiten installieren (muss VOR dem Aufruf definiert sein)
+install_dependencies() {
+  local deps=("$@")
+  if command -v apt-get &>/dev/null; then
+    apt-get update -qq
+    for dep in "${deps[@]}"; do
+      case "$dep" in
+        docker)
+          curl -fsSL https://get.docker.com | sh
+          systemctl enable --now docker
+          ;;
+        docker-compose)
+          apt-get install -y docker-compose-plugin
+          ;;
+        openssl)
+          apt-get install -y openssl
+          ;;
+      esac
+    done
+  elif command -v yum &>/dev/null; then
+    for dep in "${deps[@]}"; do
+      case "$dep" in
+        docker)
+          yum install -y docker
+          systemctl enable --now docker
+          ;;
+        openssl)
+          yum install -y openssl
+          ;;
+      esac
+    done
+  else
+    log_err "Paketmanager nicht erkannt. Bitte manuell installieren."
+    exit 1
+  fi
+}
+
 # Fehlende Abhängigkeiten installieren?
 if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
   echo ""
@@ -102,45 +139,6 @@ if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
     exit 1
   fi
 fi
-
-# Hilfsfunktion: Abhängigkeiten installieren
-install_dependencies() {
-  local deps=("$@")
-  if command -v apt-get &>/dev/null; then
-    # Debian/Ubuntu
-    apt-get update -qq
-    for dep in "${deps[@]}"; do
-      case "$dep" in
-        docker)
-          curl -fsSL https://get.docker.com | sh
-          systemctl enable --now docker
-          ;;
-        docker-compose)
-          apt-get install -y docker-compose-plugin
-          ;;
-        openssl)
-          apt-get install -y openssl
-          ;;
-      esac
-    done
-  elif command -v yum &>/dev/null; then
-    # CentOS/RHEL
-    for dep in "${deps[@]}"; do
-      case "$dep" in
-        docker)
-          yum install -y docker
-          systemctl enable --now docker
-          ;;
-        openssl)
-          yum install -y openssl
-          ;;
-      esac
-    done
-  else
-    log_err "Paketmanager nicht erkannt. Bitte manuell installieren."
-    exit 1
-  fi
-}
 
 log_ok "Alle Abhängigkeiten vorhanden"
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Database, Plus, Play, Square, RefreshCw, Trash2, ExternalLink, KeyRound } from "lucide-react";
+import { Database, Plus, Play, Square, RefreshCw, Trash2, ExternalLink, KeyRound, Trash } from "lucide-react";
 import { Header } from "@/components/layout/header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
@@ -31,6 +31,7 @@ export default function ProjectsPage() {
     const [authOpen, setAuthOpen] = useState(false);
     const [activeAuthProject, setActiveAuthProject] = useState<string | null>(null);
     const [authCallbackUrl, setAuthCallbackUrl] = useState<string>("");
+    const [redirectUrls, setRedirectUrls] = useState<string[]>([""]);
     const [authConfig, setAuthConfig] = useState<{
         customDomain?: string;
         siteUrl: string;
@@ -110,6 +111,10 @@ export default function ProjectsPage() {
             setAuthConfig(data.auth);
             setAuthCallbackUrl(data.callbackUrl || "");
             setActiveAuthProject(slug);
+            // Redirect URLs als Array aufbereiten
+            const urls = (data.auth.additionalRedirectUrls || "")
+                .split(",").map((u: string) => u.trim()).filter(Boolean);
+            setRedirectUrls(urls.length > 0 ? urls : [""]);
             setAuthOpen(true);
         } catch (err: any) {
             toast({ title: "Auth config fehlgeschlagen", description: err.response?.data?.error || err.message, variant: "destructive" });
@@ -123,7 +128,8 @@ export default function ProjectsPage() {
         if (!activeAuthProject || !authConfig) return;
         setActionLoading("auth-save");
         try {
-            await projectsApi.updateAuth(activeAuthProject, authConfig);
+            const cleanedUrls = redirectUrls.map(u => u.trim()).filter(Boolean).join(",");
+            await projectsApi.updateAuth(activeAuthProject, { ...authConfig, additionalRedirectUrls: cleanedUrls });
             toast({ title: "Auth konfiguriert", description: "Die Anbieter wurden aktualisiert." });
             setAuthOpen(false);
         } catch (err: any) {
@@ -303,13 +309,39 @@ export default function ProjectsPage() {
                                     <p className="text-xs text-muted-foreground">Die Basis-URL deiner Frontend-Anwendung (z.B. für E-Mail Redirects).</p>
                                 </div>
                                 <div className="space-y-2">
-                                    <Label>Zusätzliche Redirect-URLs (GOTRUE_URI_ALLOW_LIST)</Label>
-                                    <Input
-                                        placeholder="https://marketing.paulify.eu/*, http://localhost:3000/*"
-                                        value={authConfig.additionalRedirectUrls}
-                                        onChange={e => setAuthConfig(prev => prev ? { ...prev, additionalRedirectUrls: e.target.value } : prev)}
-                                    />
-                                    <p className="text-xs text-muted-foreground">Kommagetrennte Liste der erlaubten URLs oder Wildcards, z.B. für lokale Entwicklung oder zusätzliche Domains.</p>
+                                    <Label>Erlaubte OAuth Callback / Redirect URLs</Label>
+                                    <div className="space-y-2">
+                                        {redirectUrls.map((url, i) => (
+                                            <div key={i} className="flex gap-2">
+                                                <Input
+                                                    value={url}
+                                                    onChange={e => {
+                                                        const next = [...redirectUrls];
+                                                        next[i] = e.target.value;
+                                                        setRedirectUrls(next);
+                                                    }}
+                                                    placeholder="https://meine-app.com/auth/callback"
+                                                    className="font-mono text-xs"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setRedirectUrls(prev => prev.length > 1 ? prev.filter((_, j) => j !== i) : [""])}
+                                                    className="shrink-0 text-destructive hover:text-destructive/80"
+                                                    title="Entfernen"
+                                                >
+                                                    <Trash className="h-4 w-4" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                        <button
+                                            type="button"
+                                            onClick={() => setRedirectUrls(prev => [...prev, ""])}
+                                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                                        >
+                                            <Plus className="h-3 w-3" /> URL hinzufügen
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">Nach dem OAuth-Login darf GoTrue nur zu diesen URLs weiterleiten. Wildcards z.B. <code className="bg-muted px-1 rounded">https://app.com/**</code> erlaubt.</p>
                                 </div>
                             </div>
 

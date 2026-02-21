@@ -34,26 +34,6 @@ export const authApi = {
   me: () => api.get("/auth/me"),
 };
 
-// ─── Benutzer ────────────────────────────────────────────────
-export const usersApi = {
-  list: (page = 1, perPage = 50, query = "") =>
-    api.get("/users", { params: { page, per_page: perPage, query } }),
-  get: (id: string) => api.get(`/users/${id}`),
-  create: (data: {
-    email: string;
-    password: string;
-    role?: string;
-    email_confirm?: boolean;
-  }) => api.post("/users", data),
-  update: (id: string, data: object) => api.put(`/users/${id}`, data),
-  delete: (id: string) => api.delete(`/users/${id}`),
-  ban: (id: string, banned: boolean) =>
-    api.post(`/users/${id}/ban`, { banned }),
-  resetPassword: (id: string, password: string) =>
-    api.post(`/users/${id}/reset-password`, { password }),
-  stats: () => api.get("/users/stats/overview"),
-};
-
 // ─── Docker ──────────────────────────────────────────────────
 export const dockerApi = {
   listContainers: () => api.get("/docker/containers"),
@@ -64,6 +44,7 @@ export const dockerApi = {
     api.get(`/docker/logs/${id}`, { params: { lines } }),
   getStats: (id: string) => api.get(`/docker/stats/${id}`),
   listImages: () => api.get("/docker/images"),
+  getSystemResources: () => api.get("/docker/system/resources"),
 };
 
 // ─── Domains ─────────────────────────────────────────────────
@@ -127,6 +108,23 @@ export const envApi = {
     api.put("/env", { updates }),
   updateRaw: (content: string) => api.put("/env/raw", { content }),
   restartServices: () => api.post("/env/restart-services"),
+};
+
+// ─── Projekte (Supabase Instanzen) ───────────────────────────
+export const projectsApi = {
+  list: () => api.get("/projects"),
+  create: (data: { name: string; slug: string; db_password?: string; jwt_secret?: string }) => api.post("/projects", data),
+  get: (id: string) => api.get(`/projects/${id}`),
+  delete: (id: string) => api.delete(`/projects/${id}`),
+  action: (id: string, action: "start" | "stop" | "restart") => api.post(`/projects/${id}/action`, { action }),
+  getAuth: (id: string) => api.get(`/projects/${id}/auth`),
+  updateAuth: (id: string, providers: any) => api.put(`/projects/${id}/auth`, { providers })
+};
+
+// ─── OAuth Konfiguration ──────────────────────────────────────
+export const oauthApi = {
+  get: () => api.get("/oauth"),
+  update: (uri_allow_list: string) => api.put("/oauth", { uri_allow_list }),
 };
 
 export default api;

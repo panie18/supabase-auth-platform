@@ -4,21 +4,22 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Users, Globe, ShieldCheck, Cloud,
-  Container, ScrollText, LogOut, Settings,
+  Container, ScrollText, LogOut, Settings, Database, KeyRound
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { clearToken } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 
 const navItems = [
-  { href: "/dashboard",            label: "Übersicht",   icon: LayoutDashboard },
-  { href: "/dashboard/users",      label: "Benutzer",    icon: Users },
-  { href: "/dashboard/domains",    label: "Domains",     icon: Globe },
-  { href: "/dashboard/ssl",        label: "SSL / HTTPS", icon: ShieldCheck },
-  { href: "/dashboard/tunnel",     label: "Tunnel",      icon: Cloud },
-  { href: "/dashboard/containers", label: "Container",   icon: Container },
-  { href: "/dashboard/logs",       label: "Logs",        icon: ScrollText },
-  { href: "/dashboard/settings",   label: "Einstellungen", icon: Settings },
+  { href: "/dashboard", label: "Übersicht", icon: LayoutDashboard },
+  { href: "/dashboard/projects", label: "Projekte", icon: Database },
+  { href: "/dashboard/domains", label: "Domains", icon: Globe },
+  { href: "/dashboard/ssl", label: "SSL / HTTPS", icon: ShieldCheck },
+  { href: "/dashboard/tunnel", label: "Tunnel", icon: Cloud },
+  { href: "/dashboard/oauth", label: "OAuth", icon: KeyRound },
+  { href: "/dashboard/containers", label: "Container", icon: Container },
+  { href: "/dashboard/logs", label: "Logs", icon: ScrollText },
+  { href: "/dashboard/settings", label: "Einstellungen", icon: Settings },
 ];
 
 export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
@@ -40,11 +41,11 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
       {/* Logo */}
       <div className={cn("flex items-center gap-3 border-b px-4 py-5", collapsed && "justify-center px-0")}>
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
-          SA
+          SM
         </div>
         {!collapsed && (
           <div>
-            <p className="text-sm font-semibold leading-none">Supabase Auth</p>
+            <p className="text-sm font-semibold leading-none">Supabase Manager</p>
             <p className="text-xs text-muted-foreground">Admin Dashboard</p>
           </div>
         )}

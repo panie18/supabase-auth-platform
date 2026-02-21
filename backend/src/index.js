@@ -12,13 +12,14 @@ const { WebSocketServer } = require('ws');
 const http = require('http');
 
 const adminAuth = require('./middleware/adminAuth');
-const usersRouter = require('./routes/users');
 const dockerRouter = require('./routes/docker');
 const domainsRouter = require('./routes/domains');
 const sslRouter = require('./routes/ssl');
 const tunnelRouter = require('./routes/tunnel');
 const envRouter = require('./routes/env');
 const onboardingRouter = require('./routes/onboarding');
+const projectsRouter = require('./routes/projects');
+const oauthRouter = require('./routes/oauth');
 
 const app = express();
 const server = http.createServer(app);
@@ -105,12 +106,13 @@ app.post('/auth/logout', adminAuth, require('./routes/auth').logout);
 app.get('/auth/me', adminAuth, require('./routes/auth').me);
 
 // ─── Geschützte API Routen ────────────────────────────────────
-app.use('/users', adminAuth, usersRouter);
 app.use('/docker', adminAuth, dockerRouter);
 app.use('/domains', adminAuth, domainsRouter);
 app.use('/ssl', adminAuth, sslRouter);
 app.use('/tunnel', adminAuth, tunnelRouter);
 app.use('/env', adminAuth, envWriteLimiter, envRouter);
+app.use('/projects', adminAuth, projectsRouter);
+app.use('/oauth', adminAuth, oauthRouter);
 app.use('/onboarding', adminAuth, onboardingRouter);
 
 // ─── WebSocket: JWT-Auth erfolgt in docker.js setupLogStream ──

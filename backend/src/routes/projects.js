@@ -191,6 +191,25 @@ router.post('/', async (req, res) => {
             `$1\n    ports:\n      - \${STUDIO_PORT}:3000\n`
         );
 
+        // Inject OAuth provider env vars into auth service so GoTrue picks them up from .env
+        if (!dockerYml.includes('GOTRUE_EXTERNAL_GITHUB_ENABLED')) {
+            const oauthEnvVars = [
+                '      GOTRUE_EXTERNAL_GITHUB_ENABLED: ${GOTRUE_EXTERNAL_GITHUB_ENABLED:-false}',
+                '      GOTRUE_EXTERNAL_GITHUB_CLIENT_ID: ${GOTRUE_EXTERNAL_GITHUB_CLIENT_ID:-}',
+                '      GOTRUE_EXTERNAL_GITHUB_SECRET: ${GOTRUE_EXTERNAL_GITHUB_SECRET:-}',
+                '      GOTRUE_EXTERNAL_GITHUB_REDIRECT_URI: ${GOTRUE_EXTERNAL_GITHUB_REDIRECT_URI:-}',
+                '      GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${GOTRUE_EXTERNAL_GOOGLE_ENABLED:-false}',
+                '      GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID:-}',
+                '      GOTRUE_EXTERNAL_GOOGLE_SECRET: ${GOTRUE_EXTERNAL_GOOGLE_SECRET:-}',
+                '      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI:-}',
+            ].join('\n');
+            // Append after GOTRUE_URI_ALLOW_LIST which is always present in the auth service env
+            dockerYml = dockerYml.replace(
+                /(GOTRUE_URI_ALLOW_LIST:[^\n]*)/,
+                `$1\n${oauthEnvVars}`
+            );
+        }
+
         fs.writeFileSync(dockerYmlPath, dockerYml);
 
         // Speichere Projekt-Metadaten

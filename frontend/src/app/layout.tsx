@@ -6,8 +6,8 @@ import { Toaster } from "@/components/ui/toaster";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Supabase Auth Platform",
-  description: "Self-Hosted Supabase Auth Administration Dashboard",
+  title: "Supabase Multi-Tenant Manager",
+  description: "Self-Hosted Supabase Multi-Tenant Administration Dashboard",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

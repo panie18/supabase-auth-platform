@@ -3,6 +3,7 @@ FROM node:20-alpine
 # System-Abhängigkeiten für Docker-CLI und Certbot-Interaktion
 RUN apk add --no-cache \
     docker-cli \
+    docker-cli-compose \
     curl \
     bash \
     openssl

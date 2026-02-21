@@ -17,6 +17,29 @@ function validateContainerId(id) {
   }
 }
 
+const os = require('os');
+
+/**
+ * GET /docker/system/resources
+ */
+router.get('/system/resources', (req, res) => {
+  const cpus = os.cpus();
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+
+  const cpuPercent = (os.loadavg()[0] / cpus.length) * 100;
+
+  res.json({
+    cpu_percent: parseFloat(Math.min(100, cpuPercent).toFixed(2)),
+    cpu_cores: cpus.length,
+    memory_total_mb: Math.floor(totalMem / 1024 / 1024),
+    memory_used_mb: Math.floor((totalMem - freeMem) / 1024 / 1024),
+    memory_percent: parseFloat((((totalMem - freeMem) / totalMem) * 100).toFixed(2)),
+    uptime_seconds: os.uptime(),
+    loadavg: os.loadavg()
+  });
+});
+
 /**
  * GET /docker/containers
  */
@@ -79,10 +102,10 @@ router.post('/containers/:id/action', async (req, res) => {
 
   const container = docker.getContainer(req.params.id);
   switch (action) {
-    case 'start':   await container.start(); break;
-    case 'stop':    await container.stop({ t: 10 }); break;
+    case 'start': await container.start(); break;
+    case 'stop': await container.stop({ t: 10 }); break;
     case 'restart': await container.restart({ t: 10 }); break;
-    case 'pause':   await container.pause(); break;
+    case 'pause': await container.pause(); break;
     case 'unpause': await container.unpause(); break;
   }
 

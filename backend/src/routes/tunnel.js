@@ -62,11 +62,19 @@ router.post('/configure', async (req, res) => {
     await updateEnvVar('CLOUDFLARE_TUNNEL_NAME', tunnel_name || process.env.CLOUDFLARE_TUNNEL_NAME);
     process.env.CLOUDFLARE_TUNNEL_TOKEN = token;
 
+    // Automatischer Neustart
+    try {
+      const { execSync } = require('child_process');
+      execSync('docker compose up -d cloudflared', { cwd: '/app', stdio: 'ignore', timeout: 30000 });
+    } catch (err) {
+      console.error('Konnte auth-cloudflared nicht neustarten:', err);
+    }
+
     return res.json({
       success: true,
-      message: 'Tunnel-Token gesetzt. Container neu starten um den Tunnel zu aktivieren.',
+      message: 'Tunnel-Token gesetzt. Container automatisch neu gestartet.',
       mode: 'token',
-      restart_required: true,
+      restart_required: false,
     });
   }
 
@@ -126,26 +134,49 @@ router.post('/generate-config', async (req, res) => {
     return res.status(400).json({ error: 'DOMAIN-Umgebungsvariable nicht gesetzt' });
   }
 
+  const ingressRules = [
+    {
+      hostname: dashboardSubdomain || `dashboard.${domain}`,
+      service: 'http://nginx:80',
+    },
+    {
+      hostname: authSubdomain || `auth.${domain}`,
+      service: 'http://nginx:80',
+    },
+    {
+      hostname: domain,
+      service: 'http://nginx:80',
+    }
+  ];
+
+  // Dynamisch alle Projekte scannen und hinzufügen
+  try {
+    const projectsDir = '/app/projects';
+    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name !== '.template') {
+        const slug = entry.name;
+        // API und Studio Subdomains hinzufügen
+        ingressRules.push({
+          hostname: `api-${slug}.${domain}`,
+          service: 'http://nginx:80'
+        });
+        ingressRules.push({
+          hostname: `studio-${slug}.${domain}`,
+          service: 'http://nginx:80'
+        });
+      }
+    }
+  } catch (err) {
+    console.error('Fehler beim Scannen der Projekte für Tunnel-Config:', err);
+  }
+
+  // Fallback Catchall
+  ingressRules.push({ service: 'http_status:404' });
+
   const config = {
     tunnel: process.env.CLOUDFLARE_TUNNEL_NAME || 'supabase-auth-tunnel',
-    ingress: [
-      {
-        hostname: authSubdomain || `auth.${domain}`,
-        service: 'http://gotrue:9999',
-        originRequest: {
-          noTLSVerify: true,
-        },
-      },
-      {
-        hostname: dashboardSubdomain || `dashboard.${domain}`,
-        service: 'http://nginx:80',
-      },
-      {
-        hostname: domain,
-        service: 'http://nginx:80',
-      },
-      { service: 'http_status:404' },
-    ],
+    ingress: ingressRules,
   };
 
   const yamlContent = yaml.stringify(config);

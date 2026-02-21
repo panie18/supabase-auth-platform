@@ -5,8 +5,8 @@ import { Users, ShieldCheck, Container, Cloud, TrendingUp, Activity } from "luci
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Header } from "@/components/layout/header";
-import { usersApi, dockerApi, sslApi, tunnelApi } from "@/lib/api";
-import type { UserStats, ContainerInfo, SSLStatus, TunnelStatus } from "@/types";
+import { dockerApi, sslApi, tunnelApi } from "@/lib/api";
+import type { ContainerInfo, SSLStatus, TunnelStatus } from "@/types";
 
 interface StatCardProps {
   title: string;
@@ -35,7 +35,7 @@ function StatCard({ title, value, description, icon: Icon, badge }: StatCardProp
 }
 
 export default function DashboardPage() {
-  const [userStats, setUserStats] = useState<UserStats | null>(null);
+  const [systemResources, setSystemResources] = useState<any>(null);
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [ssl, setSsl] = useState<SSLStatus | null>(null);
   const [tunnel, setTunnel] = useState<TunnelStatus | null>(null);
@@ -45,12 +45,12 @@ export default function DashboardPage() {
     setLoading(true);
     try {
       const [statsRes, containersRes, sslRes, tunnelRes] = await Promise.allSettled([
-        usersApi.stats(),
+        dockerApi.getSystemResources(),
         dockerApi.listContainers(),
         sslApi.status(),
         tunnelApi.status(),
       ]);
-      if (statsRes.status === "fulfilled") setUserStats(statsRes.value.data);
+      if (statsRes.status === "fulfilled") setSystemResources(statsRes.value.data);
       if (containersRes.status === "fulfilled") setContainers(containersRes.value.data);
       if (sslRes.status === "fulfilled") setSsl(sslRes.value.data);
       if (tunnelRes.status === "fulfilled") setTunnel(tunnelRes.value.data);
@@ -73,11 +73,11 @@ export default function DashboardPage() {
         {/* Stats Grid */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <StatCard
-            title="Gesamte Benutzer"
-            value={loading ? "–" : (userStats?.total ?? 0)}
-            description={`+${userStats?.last_week ?? 0} diese Woche`}
-            icon={Users}
-            badge={{ label: `${userStats?.confirmed ?? 0} bestätigt`, variant: "success" }}
+            title="Host System"
+            value={loading ? "–" : `${systemResources?.cpu_percent ?? 0} % CPU`}
+            description={`${systemResources?.memory_used_mb ?? 0} MB RAM`}
+            icon={Activity}
+            badge={{ label: `${systemResources?.memory_percent ?? 0}% RAM Out of ${systemResources?.memory_total_mb ?? 0}MB`, variant: "secondary" }}
           />
           <StatCard
             title="Container"
@@ -122,7 +122,7 @@ export default function DashboardPage() {
               <div className="space-y-2">
                 {loading ? (
                   <div className="animate-pulse space-y-2">
-                    {[1,2,3,4].map(i => <div key={i} className="h-8 rounded bg-muted" />)}
+                    {[1, 2, 3, 4].map(i => <div key={i} className="h-8 rounded bg-muted" />)}
                   </div>
                 ) : containers.length === 0 ? (
                   <p className="text-sm text-muted-foreground">Keine Container gefunden</p>
@@ -153,7 +153,7 @@ export default function DashboardPage() {
               <div className="space-y-2">
                 {loading ? (
                   <div className="animate-pulse space-y-2">
-                    {[1,2,3].map(i => <div key={i} className="h-8 rounded bg-muted" />)}
+                    {[1, 2, 3].map(i => <div key={i} className="h-8 rounded bg-muted" />)}
                   </div>
                 ) : !ssl?.domains.length ? (
                   <p className="text-sm text-muted-foreground">Keine SSL-Konfiguration</p>
@@ -185,8 +185,8 @@ export default function DashboardPage() {
           <CardContent>
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="rounded-md bg-muted p-3">
-                <p className="text-xs text-muted-foreground">Gesperrte Benutzer</p>
-                <p className="text-xl font-bold">{userStats?.banned ?? "–"}</p>
+                <p className="text-xs text-muted-foreground">Load Average</p>
+                <p className="text-xl font-bold">{systemResources?.loadavg ? `[${systemResources.loadavg.map((l: any) => l.toFixed(2)).join(', ')}]` : "–"}</p>
               </div>
               <div className="rounded-md bg-muted p-3">
                 <p className="text-xs text-muted-foreground">Tunnel-Modus</p>

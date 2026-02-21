@@ -45,7 +45,7 @@ export default function TunnelPage() {
     setSaving(true);
     try {
       await tunnelApi.configure({ token });
-      toast({ title: "Tunnel-Token gespeichert", description: "Starte den cloudflared-Container neu." });
+      toast({ title: "Tunnel-Token gespeichert", description: "Tunnel wurde im Hintergrund neu gestartet." });
       setToken("");
       loadData();
     } catch (err: any) {
@@ -128,22 +128,42 @@ export default function TunnelPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>Tunnel Token</Label>
-                <Input
-                  type="password"
-                  placeholder="eyJhbGciOiJSUzI1NiJ9..."
-                  value={token}
-                  onChange={e => setToken(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Token aus dem Cloudflare Dashboard: Zero Trust → Networks → Tunnels → Tunnel erstellen → Token kopieren
-                </p>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Tunnel Token</Label>
+                  <Input
+                    type="password"
+                    placeholder="eyJhbGciOiJSUzI1NiJ9..."
+                    value={token}
+                    onChange={e => setToken(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Token aus dem Cloudflare Dashboard: Zero Trust → Networks → Tunnels → Tunnel erstellen → Token kopieren
+                  </p>
+                </div>
+
+                {status?.token_set && (
+                  <div className="p-3 bg-muted/50 rounded-md text-sm border flex flex-col justify-center">
+                    <div className="flex items-center gap-2 pl-1 mb-1">
+                      <span className="relative flex h-3 w-3">
+                        <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${status?.running ? 'bg-green-400' : 'bg-yellow-400'}`}></span>
+                        <span className={`relative inline-flex rounded-full h-3 w-3 ${status?.running ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
+                      </span>
+                      <span className="font-medium">
+                        Token ist gespeichert {status?.running ? 'und Tunnel läuft!' : 'aber Container startet noch...'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground ml-6">
+                      Um den Tunnel zu ändern, überschreibe den Token oben und klicke auf Speichern.
+                    </p>
+                  </div>
+                )}
+
+                <Button onClick={handleSaveToken} disabled={saving || !token} size="sm">
+                  {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                  Token speichern
+                </Button>
               </div>
-              <Button onClick={handleSaveToken} disabled={saving || !token} size="sm">
-                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                Token speichern
-              </Button>
 
               {/* Schritt-für-Schritt Anleitung */}
               <div className="rounded-md bg-muted p-4 text-sm space-y-2">
@@ -154,8 +174,8 @@ export default function TunnelPage() {
                   <li>Wähle "Cloudflared" als Connector-Typ</li>
                   <li>Gib dem Tunnel einen Namen (z.B. "supabase-auth")</li>
                   <li>Kopiere den Token und füge ihn oben ein</li>
-                  <li>Konfiguriere Public Hostnames für deine Domains</li>
-                  <li>Starte den cloudflared Container: <code className="bg-background px-1 rounded text-xs">docker compose --profile tunnel up -d cloudflared</code></li>
+                  <li>Klicke auf Speichern – der Tunnel verbindet sich vollautomatisch!</li>
+                  <li>Konfiguriere im Cloudflare Dashboard die Public Hostnames (Routes) für deine Subdomains und lasse alle auf <code className="bg-background px-1 rounded text-xs">http://nginx:80</code> zeigen.</li>
                 </ol>
               </div>
             </CardContent>

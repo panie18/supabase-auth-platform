@@ -97,13 +97,15 @@ function getProjectsList() {
 
 async function getProjectStatus(slug) {
     try {
-        const stdout = await runCmd(`docker compose ls --format json`, path.join(PROJECTS_DIR, slug));
-        const stacks = JSON.parse(stdout);
-        const stack = stacks.find(s => s.Name === `supabase-${slug}`);
-        if (stack) {
-            if (stack.Status.includes('running')) return 'running';
-            return 'stopped';
-        }
+        const stdout = await runCmd(`docker compose --project-name supabase-${slug} ps --format json`, path.join(PROJECTS_DIR, slug));
+        // ps --format json gibt pro Container eine Zeile JSON aus
+        const lines = stdout.trim().split('\n').filter(Boolean);
+        if (lines.length === 0) return 'stopped';
+        const containers = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+        const allRunning = containers.every(c => (c.State || c.status || '').includes('running'));
+        const anyRunning = containers.some(c => (c.State || c.status || '').includes('running'));
+        if (allRunning) return 'running';
+        if (anyRunning) return 'running';
         return 'stopped';
     } catch (e) {
         return 'error';
@@ -242,9 +244,7 @@ server {
             }
         }
 
-        // Starte per docker-compose
-        // Benenne den Compose-Manger nach dem Slug, um Kollisionen zu vermeiden
-        await runCmd(`docker compose -p supabase-${slug} up -d`, projectDir);
+        await runCmd(`docker compose --project-name supabase-${slug} up -d`, projectDir);
 
         res.json({ message: 'Projekt erfolgreich erstellt', project: projectMeta });
 
@@ -294,9 +294,9 @@ router.post('/:id/action', async (req, res) => {
 
     try {
         let cmd = '';
-        if (action === 'start') cmd = `docker compose -p supabase-${id} start`;
-        if (action === 'stop') cmd = `docker compose -p supabase-${id} stop`;
-        if (action === 'restart') cmd = `docker compose -p supabase-${id} restart`;
+        if (action === 'start') cmd = `docker compose --project-name supabase-${id} start`;
+        if (action === 'stop') cmd = `docker compose --project-name supabase-${id} stop`;
+        if (action === 'restart') cmd = `docker compose --project-name supabase-${id} restart`;
 
         await runCmd(cmd, projectDir);
         res.json({ message: `Aktion ${action} erfolgreich` });
@@ -318,7 +318,7 @@ router.delete('/:id', async (req, res) => {
 
     try {
         // Container und Volumes löschen -> -v ist sehr wichtig um db_data zu clearen
-        await runCmd(`docker compose -p supabase-${id} down -v`, projectDir).catch(() => { });
+        await runCmd(`docker compose --project-name supabase-${id} down -v`, projectDir).catch(() => { });
 
         // Ordner löschen
         await runCmd(`rm -rf ${projectDir}`, PROJECTS_DIR);
@@ -443,7 +443,7 @@ router.put('/:id/auth', async (req, res) => {
 
         // Docker restart auth (damit Gotrue neue ENV einliest)
         // Nutze up -d, damit Compose falls nötig den Container neu baut/startet
-        await runCmd(`docker compose -p supabase-${id} up -d auth`, projectDir).catch(() => { });
+        await runCmd(`docker compose --project-name supabase-${id} up -d auth`, projectDir).catch(() => { });
 
         res.json({ message: 'Auth Konfiguration aktualisiert' });
     } catch (error) {
